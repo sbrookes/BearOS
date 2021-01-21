@@ -44,11 +44,13 @@ uint64_t get_tsc_freq(){
   uint64_t perf_stat_msr, platform_msr, flex_msr; 
   uint64_t ratio, flex_ratio_max, flex_ratio_min, flex_ratio_cur;
   uint64_t tsc_freq;
-	
+
   perf_stat_msr = read_msr(0x198);
   platform_msr  = read_msr(0xCE);
+#ifndef QEMU
   flex_msr      = read_msr(0x194); 
-
+#endif
+  
 #ifdef DEBUG_TSC			
   kprintf("[TSC] Flex msr %x \n", flex_msr);
   kprintf("[TSC] Perf stat msr %x \n", perf_stat_msr);
