@@ -42,14 +42,14 @@
         movq %rdi,%rdx   /* move rdi into rdx */
         inw %dx,%ax      /* return lower 16 */
         ret
-        SET_SIZE(inb)
+        SET_SIZE(inw)
 
         ENTRY(inl)
         xorq %rax,%rax
         movq %rdi,%rdx
         inl %dx,%eax
         ret
-        SET_SIZE(inb)
+        SET_SIZE(inl)
 
         ENTRY(insw)
         movq %rdx,%rcx
@@ -70,13 +70,13 @@
         ret
         SET_SIZE(outb)
 
-	        ENTRY(outw)
+	ENTRY(outw)
         xorq %rax,%rax
         movq %rdi,%rdx
         movq %rsi,%rax
         outw %ax,%dx
         ret
-        SET_SIZE(outb)
+        SET_SIZE(outw)
 
         ENTRY(outl)
         xorq %rax,%rax
@@ -84,5 +84,5 @@
         movq %rsi,%rax
         outl %eax,%dx
         ret
-        SET_SIZE(outb)
+        SET_SIZE(outl)
 #endif
