@@ -37,14 +37,13 @@ a5
 w
 EOF
 else
-fdisk /dev/loop0 << EOF
+fdisk $1 << EOF
 n
 p
 1
 ${PART_OFFSET}
 
 a
-1
 t
 a5
 w

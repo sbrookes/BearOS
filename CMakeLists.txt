@@ -6,15 +6,15 @@ cmake_minimum_required (VERSION 2.8)
 set(CMAKE_C_COMPILER "gcc")
 project (BEAR)
 
-set(DEFAULT_FLAGS "-ggdb -fno-builtin -ffreestanding -fno-stack-protector -mcmodel=large -nostdinc -nostdlib -MMD -DSTANDALONE")
+set(DEFAULT_FLAGS "-ggdb -fno-pie -fno-builtin -ffreestanding -fno-stack-protector -mcmodel=large -nostdinc -nostdlib -MMD -DSTANDALONE -DKERNEL_DEBUG")
 
-set(SYSTEM_FLAGS "-DSERIAL_OUT_SYSTEM -DDIVERSITY -DENABLE_SMP -DXONLY_BEAR_HYPV")
+set(SYSTEM_FLAGS "-DSERIAL_OUT_SYSTEM -DDDIVERSITY -DENABLE_SMP -DDXONLY_BEAR_HYPV -DDEBUG -DDEBUG_TSC -DQEMU")
 
 # USER_FLAGS: NFS used in the system only for compilation -- not in default flags
 set(USER_FLAGS "${DEFAULT_FLAGS} -DUSER -ffunction-sections -DBEARNFS")
 
 # Set temporary GCC include directories
-set(GCC_INCLUDE_DIR "/usr/lib/gcc/x86_64-linux-gnu/4.4.3/include")
+set(GCC_INCLUDE_DIR "/usr/lib/gcc/x86_64-linux-gnu/7/include")
 
 # Enable verbose compiling
 #set(CMAKE_VERBOSE_MAKEFILE on)
