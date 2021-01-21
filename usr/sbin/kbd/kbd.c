@@ -271,9 +271,12 @@ static int scan_keyboard() {
   /* Send a message to the kernel asking for the character from the KB hardware */
 	
   code = inb(KB_DATA);       /* get the scan code for the key struck */
+#if 0
+  // per https://forum.osdev.org/viewtopic.php?f=1&t=40001 ... not needed
   val = inb(KB_CTRL);         /* strobe the keyboard to ack the char  */
   outb(KB_CTRL, val | KBIT);  /* strobe the bit high                  */
   outb(KB_CTRL, val);	       /* now strobe it low                    */
+#endif
   return code;
 }
 
