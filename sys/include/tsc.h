@@ -25,5 +25,5 @@
 
 
 uint64_t get_tsc_freq();
-inline uint64_t readtsc();
-inline uint64_t readtscp();
+uint64_t readtsc();
+uint64_t readtscp();

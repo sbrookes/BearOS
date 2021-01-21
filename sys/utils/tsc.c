@@ -24,7 +24,7 @@
 #include <stdint.h>
 #include <asm_subroutines.h>
 
-inline uint64_t readtscp() {
+uint64_t readtscp() {
   uint32_t lo, hi;
   asm volatile("rdtscp" : "=a"(lo), "=d"(hi) :: "rcx" );
 /* TODO emulate cpuid in hypv */
@@ -32,7 +32,7 @@ inline uint64_t readtscp() {
   return (uint64_t)(lo) | ((uint64_t)(hi) << 32); 
 }
 
-inline uint64_t readtsc() {
+uint64_t readtsc() {
   uint32_t lo, hi;
  // asm volatile("cpuid");
   asm volatile("rdtsc" : "=a"(lo), "=d"(hi) :: "rcx" );
