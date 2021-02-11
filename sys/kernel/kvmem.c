@@ -115,8 +115,8 @@ void kvmem_init( uint64_t frame_array_address, uint64_t heap_start ) {
    not adjust the frame array... it exists to help old kernel contexts catch 
    up with what the new kernel core kernel context does. When there is jsut 1 
    kernel context, this can go away. */
-#ifdef SLB_THESIS
 int attach_page(uint64_t vaddr, uint64_t paddr, uint64_t flags) {
+#ifdef SLB_THESIS
   return attach_page_imp(vaddr, paddr, flags, 0);
 }
   

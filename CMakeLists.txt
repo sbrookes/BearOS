@@ -11,13 +11,13 @@ set(DEFAULT_FLAGS "-ggdb -fno-pie -fno-builtin -ffreestanding -fno-stack-protect
 set(SYSTEM_FLAGS "-DSERIAL_OUT_SYSTEM -DDDIVERSITY -DENABLE_SMP -DDXONLY_BEAR_HYPV -DDEBUG -DDEBUG_TSC -DQEMU")
 
 # USER_FLAGS: NFS used in the system only for compilation -- not in default flags
-set(USER_FLAGS "${DEFAULT_FLAGS} -DUSER -ffunction-sections -DBEARNFS")
+set(USER_FLAGS "${DEFAULT_FLAGS} -DUSER -ffunction-sections -DBEARNFS -DSLB_THESIS")
 
 # Set temporary GCC include directories
 set(GCC_INCLUDE_DIR "/usr/lib/gcc/x86_64-linux-gnu/7/include")
 
 # Enable verbose compiling
-set(CMAKE_VERBOSE_MAKEFILE on)
+#set(CMAKE_VERBOSE_MAKEFILE on)
 
 # Enable C-language and ASM
 enable_language(C ASM)
