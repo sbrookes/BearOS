@@ -1,24 +1,3 @@
-# Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-#	          Thayer School of Engineering at Dartmouth College>
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy 
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights 
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
-# copies of the Software, and to permit persons to whom the Software is 
-# furnished to do so, subject to the following conditions:
-# 
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-# 
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-	
 # asm_interrupts.S
 # Contains the interrupt-handling assembly code
 
@@ -37,13 +16,15 @@
 #endif
 #endif
   .extern print_exception_info_one
-	.extern print_exception_info_two	
+	.extern print_exception_info_two
+
 
 #ifdef HYPV
 	.extern lapic_eoi
 	.extern systick_hypv_handler
 	.extern keyboard_hypv_handler
 	.extern network_hypv_handler
+	.extern vtd_fault_handler
 #endif
 	
 	.text # Is this right?
@@ -352,6 +333,35 @@ ENTRY(restore_kernel_proc)
 
 SET_SIZE(restore_kernel_proc)
 
+#ifdef SLB_THESIS
+ENTRY(kernel_to_ring0_proc)
+
+  # first, switch to the process' cr3 target
+  movq %rdi, %cr3 # first arg (rdi) is the phys cr3
+	
+  lgdt (%rsi)
+  mov $0x28, %ax
+  ltr %ax
+  lidt (%rdx)
+
+ring0_idle:
+	sti
+	hlt
+	jmp ring0_idle
+
+
+	# set stack pointer
+  movq SPREG(%rdi), %rsp
+	hlt
+
+  jmpq *PCREG(%rdi)
+
+# i dont think we're changing SS from kernel to ring0 proc.
+#  movq SSREG(%rdi), %rax
+#  movq %rax, %ss    
+	
+SET_SIZE(kernel_to_ring0_proc)
+#endif
 
 #ifdef HYPV_SHIM
 ENTRY(restore_kernel_from_shim)
@@ -428,6 +438,19 @@ ENTRY(network_asm)
 
 	iretq		
 SET_SIZE(network_asm)
+
+ENTRY(vtd_fault_asm)
+	cli
+	HYPV_SAVE_CONTEXT
+						
+	movq $0x86, %rdi
+	RELCALL(vtd_fault_handler)
+	RELCALL(lapic_eoi)
+	HYPV_RESTORE_CONTEXT
+
+	iretq		
+SET_SIZE(vtd_fault_asm)
+
 
 
 #endif     
@@ -519,14 +542,14 @@ SET_SIZE(exc_info)
 
 # Exception Handling
 ENTRY(generic_excp)
-	HYPV_SAVE_CONTEXT
+ HYPV_SAVE_CONTEXT
 #if (defined KERNEL && defined ENABLE_SMP)
   RELCALL(interrupt_acquire_lock)
 #endif
 HYPV_RESTORE_CONTEXT
 	SAVE_CONTEXT
   pushq $0
-  call exc_info
+	call exc_info
 	hlt
 	jmp .
 SET_SIZE(generic_excp)
@@ -572,6 +595,27 @@ ENTRY(generic_swint)
 #endif
 SET_SIZE(generic_swint)
 
+#ifdef SLB_THESIS
+# IPI handling
+ENTRY(generic_ipi)
+
+	# pop the interrupt vector off of the stack and pass to handler
+	popq %rdi
+	
+	# push all regs onto the stack.
+	POINTER_SAVE_CONTEXT
+
+	# call the interrupt handler from C
+	RELCALL(intr_invoke_handler)
+	
+	# restore regs from stack.
+	POINTER_RESTORE_CONTEXT
+
+	# return
+	iretq
+
+SET_SIZE(generic_ipi)
+#endif
 
 ############################# End of handler for interrupts below #############
 
@@ -969,6 +1013,686 @@ SET_SIZE(generic_swint)
 	.word vec81-vec80
 	SET_SIZE(swi_handler_len)
 
+#ifdef SLB_THESIS
+# We will set the rest up for IPIs... just because.
+	
+	ENTRY(vec90)
+	cli
+	pushq $0x90
+	jmp generic_ipi
+	SET_SIZE(vec90)
+
+	ENTRY(vec91)
+	cli
+	pushq $0x91
+	jmp generic_ipi
+	SET_SIZE(vec91)
+
+	ENTRY(vec92)
+	cli
+	pushq $0x92
+	jmp generic_ipi
+	SET_SIZE(vec92)
+
+	ENTRY(vec93)
+	cli
+	pushq $0x93
+	jmp generic_ipi
+	SET_SIZE(vec93)
+
+	ENTRY(vec94)
+	cli
+	pushq $0x94
+	jmp generic_ipi
+	SET_SIZE(vec94)
+
+	ENTRY(vec95)
+	cli
+	pushq $0x95
+	jmp generic_ipi
+	SET_SIZE(vec95)
+
+	ENTRY(vec96)
+	cli
+	pushq $0x96
+	jmp generic_ipi
+	SET_SIZE(vec96)
+
+	ENTRY(vec97)
+	cli
+	pushq $0x97
+	jmp generic_ipi
+	SET_SIZE(vec97)
+
+	ENTRY(vec98)
+	cli
+	pushq $0x98
+	jmp generic_ipi
+	SET_SIZE(vec98)
+
+	ENTRY(vec99)
+	cli
+	pushq $0x99
+	jmp generic_ipi
+	SET_SIZE(vec99)
+
+	ENTRY(vec9A)
+	cli
+	pushq $0x9A
+	jmp generic_ipi
+	SET_SIZE(vec9A)
+
+	ENTRY(vec9B)
+	cli
+	pushq $0x9B
+	jmp generic_ipi
+	SET_SIZE(vec9B)
+
+	ENTRY(vec9C)
+	cli
+	pushq $0x9C
+	jmp generic_ipi
+	SET_SIZE(vec9C)
+
+	ENTRY(vec9D)
+	cli
+	pushq $0x9D
+	jmp generic_ipi
+	SET_SIZE(vec9D)
+
+	ENTRY(vec9E)
+	cli
+	pushq $0x9E
+	jmp generic_ipi
+	SET_SIZE(vec9E)
+
+	ENTRY(vec9F)
+	cli
+	pushq $0x9F
+	jmp generic_ipi
+	SET_SIZE(vec9F)
+
+	ENTRY(vecA0)
+	cli
+	pushq $0xA0
+	jmp generic_ipi
+	SET_SIZE(vecA0)
+
+	ENTRY(vecA1)
+	cli
+	pushq $0xA1
+	jmp generic_ipi
+	SET_SIZE(vecA1)
+
+	ENTRY(vecA2)
+	cli
+	pushq $0xA2
+	jmp generic_ipi
+	SET_SIZE(vecA2)
+
+	ENTRY(vecA3)
+	cli
+	pushq $0xA3
+	jmp generic_ipi
+	SET_SIZE(vecA3)
+
+	ENTRY(vecA4)
+	cli
+	pushq $0xA4
+	jmp generic_ipi
+	SET_SIZE(vecA4)
+
+	ENTRY(vecA5)
+	cli
+	pushq $0xA5
+	jmp generic_ipi
+	SET_SIZE(vecA5)
+
+	ENTRY(vecA6)
+	cli
+	pushq $0xA6
+	jmp generic_ipi
+	SET_SIZE(vecA6)
+
+	ENTRY(vecA7)
+	cli
+	pushq $0xA7
+	jmp generic_ipi
+	SET_SIZE(vecA7)
+
+	ENTRY(vecA8)
+	cli
+	pushq $0xA8
+	jmp generic_ipi
+	SET_SIZE(vecA8)
+
+	ENTRY(vecA9)
+	cli
+	pushq $0xA9
+	jmp generic_ipi
+	SET_SIZE(vecA9)
+
+	ENTRY(vecAA)
+	cli
+	pushq $0xAA
+	jmp generic_ipi
+	SET_SIZE(vecAA)
+
+	ENTRY(vecAB)
+	cli
+	pushq $0xAB
+	jmp generic_ipi
+	SET_SIZE(vecAB)
+
+	ENTRY(vecAC)
+	cli
+	pushq $0xAC
+	jmp generic_ipi
+	SET_SIZE(vecAC)
+
+	ENTRY(vecAD)
+	cli
+	pushq $0xAD
+	jmp generic_ipi
+	SET_SIZE(vecAD)
+
+	ENTRY(vecAE)
+	cli
+	pushq $0xAE
+	jmp generic_ipi
+	SET_SIZE(vecAE)
+
+	ENTRY(vecAF)
+	cli
+	pushq $0xAF
+	jmp generic_ipi
+	SET_SIZE(vecAF)
+
+	ENTRY(vecB0)
+	cli
+	pushq $0xB0
+	jmp generic_ipi
+	SET_SIZE(vecB0)
+
+	ENTRY(vecB1)
+	cli
+	pushq $0xB1
+	jmp generic_ipi
+	SET_SIZE(vecB1)
+
+	ENTRY(vecB2)
+	cli
+	pushq $0xB2
+	jmp generic_ipi
+	SET_SIZE(vecB2)
+
+	ENTRY(vecB3)
+	cli
+	pushq $0xB3
+	jmp generic_ipi
+	SET_SIZE(vecB3)
+
+	ENTRY(vecB4)
+	cli
+	pushq $0xB4
+	jmp generic_ipi
+	SET_SIZE(vecB4)
+
+	ENTRY(vecB5)
+	cli
+	pushq $0xB5
+	jmp generic_ipi
+	SET_SIZE(vecB5)
+
+	ENTRY(vecB6)
+	cli
+	pushq $0xB6
+	jmp generic_ipi
+	SET_SIZE(vecB6)
+
+	ENTRY(vecB7)
+	cli
+	pushq $0xB7
+	jmp generic_ipi
+	SET_SIZE(vecB7)
+
+	ENTRY(vecB8)
+	cli
+	pushq $0xB8
+	jmp generic_ipi
+	SET_SIZE(vecB8)
+
+	ENTRY(vecB9)
+	cli
+	pushq $0xB9
+	jmp generic_ipi
+	SET_SIZE(vecB9)
+
+	ENTRY(vecBA)
+	cli
+	pushq $0xBA
+	jmp generic_ipi
+	SET_SIZE(vecBA)
+
+	ENTRY(vecBB)
+	cli
+	pushq $0xBB
+	jmp generic_ipi
+	SET_SIZE(vecBB)
+
+	ENTRY(vecBC)
+	cli
+	pushq $0xBC
+	jmp generic_ipi
+	SET_SIZE(vecBC)
+
+	ENTRY(vecBD)
+	cli
+	pushq $0xBD
+	jmp generic_ipi
+	SET_SIZE(vecBD)
+
+	ENTRY(vecBE)
+	cli
+	pushq $0xBE
+	jmp generic_ipi
+	SET_SIZE(vecBE)
+
+	ENTRY(vecBF)
+	cli
+	pushq $0xBF
+	jmp generic_ipi
+	SET_SIZE(vecBF)
+
+	ENTRY(vecC0)
+	cli
+	pushq $0xC0
+	jmp generic_ipi
+	SET_SIZE(vecC0)
+
+	ENTRY(vecC1)
+	cli
+	pushq $0xC1
+	jmp generic_ipi
+	SET_SIZE(vecC1)
+
+	ENTRY(vecC2)
+	cli
+	pushq $0xC2
+	jmp generic_ipi
+	SET_SIZE(vecC2)
+
+	ENTRY(vecC3)
+	cli
+	pushq $0xC3
+	jmp generic_ipi
+	SET_SIZE(vecC3)
+
+	ENTRY(vecC4)
+	cli
+	pushq $0xC4
+	jmp generic_ipi
+	SET_SIZE(vecC4)
+
+	ENTRY(vecC5)
+	cli
+	pushq $0xC5
+	jmp generic_ipi
+	SET_SIZE(vecC5)
+
+	ENTRY(vecC6)
+	cli
+	pushq $0xC6
+	jmp generic_ipi
+	SET_SIZE(vecC6)
+
+	ENTRY(vecC7)
+	cli
+	pushq $0xC7
+	jmp generic_ipi
+	SET_SIZE(vecC7)
+
+	ENTRY(vecC8)
+	cli
+	pushq $0xC8
+	jmp generic_ipi
+	SET_SIZE(vecC8)
+
+	ENTRY(vecC9)
+	cli
+	pushq $0xC9
+	jmp generic_ipi
+	SET_SIZE(vecC9)
+
+	ENTRY(vecCA)
+	cli
+	pushq $0xCA
+	jmp generic_ipi
+	SET_SIZE(vecCA)
+
+	ENTRY(vecCB)
+	cli
+	pushq $0xCB
+	jmp generic_ipi
+	SET_SIZE(vecCB)
+
+	ENTRY(vecCC)
+	cli
+	pushq $0xCC
+	jmp generic_ipi
+	SET_SIZE(vecCC)
+
+	ENTRY(vecCD)
+	cli
+	pushq $0xCD
+	jmp generic_ipi
+	SET_SIZE(vecCD)
+
+	ENTRY(vecCE)
+	cli
+	pushq $0xCE
+	jmp generic_ipi
+	SET_SIZE(vecCE)
+
+	ENTRY(vecCF)
+	cli
+	pushq $0xCF
+	jmp generic_ipi
+	SET_SIZE(vecCF)
+
+	ENTRY(vecD0)
+	cli
+	pushq $0xD0
+	jmp generic_ipi
+	SET_SIZE(vecD0)
+
+	ENTRY(vecD1)
+	cli
+	pushq $0xD1
+	jmp generic_ipi
+	SET_SIZE(vecD1)
+
+	ENTRY(vecD2)
+	cli
+	pushq $0xD2
+	jmp generic_ipi
+	SET_SIZE(vecD2)
+
+	ENTRY(vecD3)
+	cli
+	pushq $0xD3
+	jmp generic_ipi
+	SET_SIZE(vecD3)
+
+	ENTRY(vecD4)
+	cli
+	pushq $0xD4
+	jmp generic_ipi
+	SET_SIZE(vecD4)
+
+	ENTRY(vecD5)
+	cli
+	pushq $0xD5
+	jmp generic_ipi
+	SET_SIZE(vecD5)
+
+	ENTRY(vecD6)
+	cli
+	pushq $0xD6
+	jmp generic_ipi
+	SET_SIZE(vecD6)
+
+	ENTRY(vecD7)
+	cli
+	pushq $0xD7
+	jmp generic_ipi
+	SET_SIZE(vecD7)
+
+	ENTRY(vecD8)
+	cli
+	pushq $0xD8
+	jmp generic_ipi
+	SET_SIZE(vecD8)
+
+	ENTRY(vecD9)
+	cli
+	pushq $0xD9
+	jmp generic_ipi
+	SET_SIZE(vecD9)
+
+	ENTRY(vecDA)
+	cli
+	pushq $0xDA
+	jmp generic_ipi
+	SET_SIZE(vecDA)
+
+	ENTRY(vecDB)
+	cli
+	pushq $0xDB
+	jmp generic_ipi
+	SET_SIZE(vecDB)
+
+	ENTRY(vecDC)
+	cli
+	pushq $0xDC
+	jmp generic_ipi
+	SET_SIZE(vecDC)
+
+	ENTRY(vecDD)
+	cli
+	pushq $0xDD
+	jmp generic_ipi
+	SET_SIZE(vecDD)
+
+	ENTRY(vecDE)
+	cli
+	pushq $0xDE
+	jmp generic_ipi
+	SET_SIZE(vecDE)
+
+	ENTRY(vecDF)
+	cli
+	pushq $0xDF
+	jmp generic_ipi
+	SET_SIZE(vecDF)
+
+	ENTRY(vecE0)
+	cli
+	pushq $0xE0
+	jmp generic_ipi
+	SET_SIZE(vecE0)
+
+	ENTRY(vecE1)
+	cli
+	pushq $0xE1
+	jmp generic_ipi
+	SET_SIZE(vecE1)
+
+	ENTRY(vecE2)
+	cli
+	pushq $0xE2
+	jmp generic_ipi
+	SET_SIZE(vecE2)
+
+	ENTRY(vecE3)
+	cli
+	pushq $0xE3
+	jmp generic_ipi
+	SET_SIZE(vecE3)
+
+	ENTRY(vecE4)
+	cli
+	pushq $0xE4
+	jmp generic_ipi
+	SET_SIZE(vecE4)
+
+	ENTRY(vecE5)
+	cli
+	pushq $0xE5
+	jmp generic_ipi
+	SET_SIZE(vecE5)
+
+	ENTRY(vecE6)
+	cli
+	pushq $0xE6
+	jmp generic_ipi
+	SET_SIZE(vecE6)
+
+	ENTRY(vecE7)
+	cli
+	pushq $0xE7
+	jmp generic_ipi
+	SET_SIZE(vecE7)
+
+	ENTRY(vecE8)
+	cli
+	pushq $0xE8
+	jmp generic_ipi
+	SET_SIZE(vecE8)
+
+	ENTRY(vecE9)
+	cli
+	pushq $0xE9
+	jmp generic_ipi
+	SET_SIZE(vecE9)
+
+	ENTRY(vecEA)
+	cli
+	pushq $0xEA
+	jmp generic_ipi
+	SET_SIZE(vecEA)
+
+	ENTRY(vecEB)
+	cli
+	pushq $0xEB
+	jmp generic_ipi
+	SET_SIZE(vecEB)
+
+	ENTRY(vecEC)
+	cli
+	pushq $0xEC
+	jmp generic_ipi
+	SET_SIZE(vecEC)
+
+	ENTRY(vecED)
+	cli
+	pushq $0xED
+	jmp generic_ipi
+	SET_SIZE(vecED)
+
+	ENTRY(vecEE)
+	cli
+	pushq $0xEE
+	jmp generic_ipi
+	SET_SIZE(vecEE)
+
+	ENTRY(vecEF)
+	cli
+	pushq $0xEF
+	jmp generic_ipi
+	SET_SIZE(vecEF)
+
+	ENTRY(vecF0)
+	cli
+	pushq $0xF0
+	jmp generic_ipi
+	SET_SIZE(vecF0)
+
+	ENTRY(vecF1)
+	cli
+	pushq $0xF1
+	jmp generic_ipi
+	SET_SIZE(vecF1)
+
+	ENTRY(vecF2)
+	cli
+	pushq $0xF2
+	jmp generic_ipi
+	SET_SIZE(vecF2)
+
+	ENTRY(vecF3)
+	cli
+	pushq $0xF3
+	jmp generic_ipi
+	SET_SIZE(vecF3)
+
+	ENTRY(vecF4)
+	cli
+	pushq $0xF4
+	jmp generic_ipi
+	SET_SIZE(vecF4)
+
+	ENTRY(vecF5)
+	cli
+	pushq $0xF5
+	jmp generic_ipi
+	SET_SIZE(vecF5)
+
+	ENTRY(vecF6)
+	cli
+	pushq $0xF6
+	jmp generic_ipi
+	SET_SIZE(vecF6)
+
+	ENTRY(vecF7)
+	cli
+	pushq $0xF7
+	jmp generic_ipi
+	SET_SIZE(vecF7)
+
+	ENTRY(vecF8)
+	cli
+	pushq $0xF8
+	jmp generic_ipi
+	SET_SIZE(vecF8)
+
+	ENTRY(vecF9)
+	cli
+	pushq $0xF9
+	jmp generic_ipi
+	SET_SIZE(vecF9)
+
+	ENTRY(vecFA)
+	cli
+	pushq $0xFA
+	jmp generic_ipi
+	SET_SIZE(vecFA)
+
+	ENTRY(vecFB)
+	cli
+	pushq $0xFB
+	jmp generic_ipi
+	SET_SIZE(vecFB)
+
+	ENTRY(vecFC)
+	cli
+	pushq $0xFC
+	jmp generic_ipi
+	SET_SIZE(vecFC)
+
+	ENTRY(vecFD)
+	cli
+	pushq $0xFD
+	jmp generic_ipi
+	SET_SIZE(vecFD)
+
+	ENTRY(vecFE)
+	cli
+	pushq $0xFE
+	jmp generic_ipi
+	SET_SIZE(vecFE)
+
+	ENTRY(vecFF)
+	cli
+	pushq $0xFF
+	jmp generic_ipi
+	SET_SIZE(vecFF)
+	
+	# declare the size of each handler
+	DATA_ENTRY(ipi_handler_len)
+	.word vec91-vec90
+	SET_SIZE(ipi_handler_len)
+#endif
 
 ### This is the dirt simply way to register interrupts  I leave this here as 
 #a tutorial if needed in the future. 

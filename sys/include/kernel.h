@@ -1,26 +1,3 @@
-/*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
 #pragma once
 /******************************************************************************
  *
@@ -28,15 +5,15 @@
  *
  * Description: Includes panic function, kernel config macros, etc.
  *
- *****************************************************************************/
+ ******************************************************************************/
 
 #include <constants.h>  /* For PL_x      */
 #include <proc.h>       /* For Proc_t    */
 #include <elf_loader.h>
 
-/******************************************************************************
- * DEFINES ********************************************************************
- *****************************************************************************/
+/*******************************************************************************
+ * DEFINES *********************************************************************
+ ******************************************************************************/
 
 
 
@@ -47,9 +24,9 @@
 #define U_DATASEG (0x20 | PL_3)
 
 
-/******************************************************************************
- * PUBLIC FUNCTIONS ***********************************************************
- *****************************************************************************/
+/*******************************************************************************
+ * PUBLIC FUNCTIONS ************************************************************
+ ******************************************************************************/
 
 /* Prints the given error string and halts the system. */
 void kpanic(char *);
@@ -80,3 +57,6 @@ void set_kbd_perms(Proc_t *p);
 /* First routine to be called by new_proc to start the process */
 void kstart();
 
+#ifdef SLB_THESIS
+void asmp_kernel_syscall(Message_t *mp, Proc_t *cp);
+#endif

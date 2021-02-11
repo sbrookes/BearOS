@@ -1,26 +1,3 @@
-/*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
 #pragma once
 #include <stdint.h>
 #include <kvmem_sites.h>
@@ -48,6 +25,7 @@
  * 0x1400000 = 20MB
  */
 #define DRIVER_MEM_START (0x80000000000UL)
+// #define DRIVER_MEM_START 0x30000000000
 
 /* Size of stack */
 #define USR_STACK_PAGES 8 
@@ -86,10 +64,9 @@
 #define virt2pt(addr)    ((((uint64_t)(addr)) >> 12) & 0x1FF)
 #define virt2pg(addr)    ((((uint64_t)(addr))      ) & 0xFFF)
 
-/******************************************************************************
- ************************** PAGING PROTECTION BITS ****************************
- *****************************************************************************/
-
+/*******************************************************************************
+ *************************** PAGING PROTECTION BITS ****************************
+ ******************************************************************************/
 /* 
  * These flags are used by set_pt_flags() to tell which bits to set in PT
  * entries. Note that these may not correspond to the actual bit locations in
@@ -123,9 +100,27 @@
 #define UMEM_IO_FLAGS    (PG_PRESENT | PG_RW | PG_USER)
 #define UMEM_IO_FLAGS_UC (PG_PRESENT | PG_RW | PG_NX | PG_USER | PG_PWT | PG_PCD)
 
+#ifdef SLB_THESIS
+
+/* IMPT IMPT NOTE TODO TODO 
+
+as written, these will page fault or generally fuck up if you use them on 
+unmapped tables... */
+
+#define remote_pdpt_virt(pcr3, pml4t_idx) ((struct page_directory_pointer_table *)phys2virt((uint64_t)TABLE2ADDR(((struct page_map_level_4_table*)phys2virt((uint64_t)pcr3))->entries[pml4t_idx].addr)))
+
+#define remote_pd_virt(pcr3, pml4t_idx, pdpt_idx) ((struct page_directory *)phys2virt((uint64_t)TABLE2ADDR(remote_pdpt_virt(pcr3, pml4t_idx)->entries[pdpt_idx].addr)))
+
+#define remote_pt_virt(pcr3, pml4t_idx, pdpt_idx, pd_idx) ((struct page_table*)phys2virt((uint64_t)TABLE2ADDR(remote_pd_virt(pcr3, pml4t_idx, pdpt_idx)->entries[pd_idx].addr)))
+
+#define check_vmem_bridge(proc) do { if ( proc->vmem_bridge_idx < 0 ) vmem_bridge(proc); } while (0)
+
+#define remote2vaddr(proc, vaddr) ((uint64_t*)(((uint64_t)remote_idx2vaddr(proc, virt2pml4t(vaddr), virt2pdpt(vaddr), virt2pd(vaddr), virt2pt(vaddr))) | (((uint64_t)vaddr) & 0xfff)))
+
+#endif 
 
 /** These four functions make use of the self-referencing page table trick 
-    to build a mapping to a given paging structure entry; either a pml4t entry,
+    to build a mapping to a given paging structure entry - either a pml4t entry,
     a pdpt entry, a pd entry, or a pt entry. */
 #define PTE2vaddr(pml4te, pdpte, pde, pte) ((uint64_t*)(0xffffff8000000000 | (((uint64_t)((pml4te) & 0x1ff)) << 30) \
 							| (((uint64_t)((pdpte) & 0x1ff)) << 21) \
@@ -168,7 +163,6 @@ struct frame_array_entry_t *framearray;
  * ----------------------------- STRUCTURES ----------------------------------
  * ---------------------------------------------------------------------------
  */
-
 /* Memory map provided by the BIOS. */
 struct memmap {
   uint64_t base;
@@ -254,9 +248,9 @@ union ept_pt_entry {
 /* Page table structures. Note that we have some "pseudo-OO" here -- each
  * structure can be used for either regular page table entries, OR EPT page
  * table entries. This does _not_ mean that a structure contains both regular
- * page table info and EPT page table info -- it's one or the other (despite 
- * the use of union). We do it this way to avoid duplicating code that we 
- * shouldn't really have to.
+ * page table info and EPT page table info -- it's one or the other (despite the
+ * use of union). We do it this way to avoid duplicating code that we shouldn't
+ * really have to.
  */
 struct page_table {
   union {
@@ -350,3 +344,14 @@ void seed_vmem_layer( uint64_t frame_array_address, uint64_t heap_start );
 uint64_t get_free_frame(void);
 void set_page_permission(uint64_t vaddr, uint64_t length, uint64_t flags);
 
+#if defined(SLB_THESIS) && defined(KERNEL)
+#include <proc.h>
+uint64_t vmem_alloc_remote(Proc_t *proc, uint64_t* base, uint64_t length, uint64_t flags );
+
+uint64_t *remote_PML4TE2vaddr(Proc_t *proc, int pml4te);
+uint64_t *remote_PDPTE2vaddr(Proc_t *proc, int pml4te, int pdpte);
+uint64_t *remote_PDE2vaddr(Proc_t *proc, int pml4te, int pdpte, int pde);
+uint64_t *remote_PTE2vaddr(Proc_t *proc, int pml4te, int pdpte, int pde, int pte);
+uint64_t *remote_idx2vaddr(Proc_t *proc, int pml4te, int pdpte, int pde, int pte);
+
+#endif

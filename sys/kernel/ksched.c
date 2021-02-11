@@ -1,33 +1,12 @@
-/*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
-/******************************************************************************
+/*******************************************************************************
  * Filename: ksched.c
+ *
+ * Author: Colin Nichols
  *
  * Description: 
  * This file implements the scheduler for the Bear microkernel.
  *
- *****************************************************************************/
+ *******************************************************************************/
 
 #include <constants.h>
 #include <kernel.h>
@@ -43,7 +22,7 @@
 #include <interrupts.h>
 #include <khash.h>
 
-extern void idle(uint64_t*);          /* asm func to make CPU idle           */
+extern void idle(uint64_t*);          /* asm func to make CPU idle            */
 
 /*** PRIVATE DECLARACTIONS ***/
 
@@ -51,6 +30,9 @@ extern void idle(uint64_t*);          /* asm func to make CPU idle           */
 static void *readyq;                  /* The queue of ready-to-run procs */
 static void *hookq;                   /* Hooks to run before scheduling */
 
+#ifdef SLB_THESIS
+static void *ring0q;
+#endif
 
 /* Private functions */
 static void ksched_set_next(Proc_t *p);
@@ -72,10 +54,12 @@ int ksched_init() {
   /* Init run queue */
   readyq = qopen();
 
+#ifdef SLB_THESIS
+  ring0q = qopen();
+#endif
 
   /* Initialize hook queue. */
   hookq = qopen();
-
   /* Create idle proc for when no other processes are ready to run */
   idleps = kmalloc_track(KSCHED_SITE, smp_num_cpus*sizeof(Proc_t*));
   for ( i = 0; i < smp_num_cpus; i++ ) {
@@ -90,6 +74,14 @@ int ksched_init() {
   proc_ptr_array = (Proc_t**)kmalloc_track(KSCHED_SITE, smp_num_cpus*sizeof(Proc_t*));
   kmemset(proc_ptr_array, 0, smp_num_cpus*sizeof(Proc_t*));
 
+#ifdef SLB_THESIS
+  ring0_proc_ptr_array = (Proc_t**)kmalloc_track(KSCHED_SITE, smp_num_cpus*sizeof(Proc_t*));
+  kmemset(ring0_proc_ptr_array, 0, smp_num_cpus*sizeof(Proc_t*));
+
+  ring0_nproc_ptr_array = (Proc_t**)kmalloc_track(KSCHED_SITE, smp_num_cpus*sizeof(Proc_t*));
+  kmemset(ring0_nproc_ptr_array, 0, smp_num_cpus*sizeof(Proc_t*));
+
+#endif
 
   return 0;
 }
@@ -167,18 +159,25 @@ void ksched_block(Proc_t *p) {
 /* Called when a process is able to run again. */
 void ksched_unblock(Proc_t *p) {
   qput(readyq, (void*)p);
-
   update_proc_status(p,0,CONTINUED);
 }
 
 /* Should be called when a new process is created */
 void ksched_add(Proc_t *p) {
-
-  /* todo, check for and skip idle procs in here. */
-
-    qput(readyq, (void*)p);
+  qput(readyq, (void*)p);
 }
 
+#ifdef SLB_THESIS
+
+/* Should be called when a new process is created */
+void ksched_add_remote(Proc_t *p) {
+  qput(ring0q, (void*)p);
+}
+
+Proc_t *ksched_get_remote(void) {
+  return qget(ring0q);
+}
+#endif
 
 /* 
  * FIXME: This will cause ksched_get_last() to return invalid NULL,
@@ -319,6 +318,17 @@ void ksched_yield(/**DO NOT ADD ARGUMENTS*/){
   curr_p->kmc.rsp = (reg_t)((uint64_t)curr_p->kmc.rbp+16);
   curr_p->kmc.rbp = *(uint64_t*)((uint64_t)curr_p->kmc.rbp); 
 
+#if 0
+  kprintf("curr_p kmc.rsp = 0x%x curr_p pid = %d curr_cr3 = 0x%x\n",
+	  curr_p->kmc.rsp, curr_p->pid, curr_p->cr3_target);
+  kprintf("curr_p kmc.rbp = 0x%x curr_p mc.rsp 0x%x\n", 
+	  curr_p->kmc.rbp, curr_p->mc.rsp); 
+
+  kprintf("next_p kmc.rsp = 0x%x next_p pid = %d next_cr3 = 0x%x\n",
+	  next_p->kmc.rsp, next_p->pid, next_p->cr3_target);
+  kprintf("next_p kmc.rbp = 0x%x next_p mc.rsp 0x%x\n", 
+	  next_p->kmc.rbp, next_p->mc.rsp); 
+#endif
   restore_kernel_proc(next_p);
   kpanic("[KERNEL] Panic - Yield should not reach this!");
 }

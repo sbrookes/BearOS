@@ -1,27 +1,4 @@
 /*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
-/*
  * kmsg.c -- the message system is built on two hash tables:
  * waitingq -- all processes suspended waiting for messages, hashed on 
  *    RECIEVER pid
@@ -49,7 +26,7 @@
 
 /* PRIVATE DECLARATIONS */
 
-static void *msgq;     /* hash table of messages waiting for a process */
+static void *msgq;  /* hash table of messages waiting for a process */
 static void *waitingq; /* hash table of processes waiting for a message */
 
 static int is_msg(void *msgp,const void *vmhp);
@@ -59,8 +36,8 @@ static int is_waiting_for_tag(void *msgp,const void *vmhp);
 static void kmsg_printproc(void *resp,void *ep);
 
 #define HASHTABLESIZE 10
-
 /* PUBLIC FUNCTIONS */
+
 
 /*
  * kmsg_init() -- create hash tables and init everything necessary for 
@@ -104,6 +81,7 @@ void print_waitq(void * p){
 void kmsg_send(Message_t *mp) {
   Message_t *newmsgp;
   MsgHeader mh;
+  /*	Msg_status_t status; */
   Proc_t *p;
   int type;
 
@@ -115,7 +93,7 @@ void kmsg_send(Message_t *mp) {
   mh.destpid = mp->dst;
   mh.srcpid = mp->src;
    
-  /* allocate kernel space for msg */
+   /* allocate kernel space for msg */
   newmsgp=(Message_t*)kmalloc_track(KMSG_SITE,sizeof(Message_t));
   newmsgp->buf = kmalloc_track(KMSG_SITE,mp->len);
   if ((newmsgp == NULL) || (newmsgp->buf == NULL))
@@ -144,8 +122,9 @@ void kmsg_send(Message_t *mp) {
       kpanic("HORRIBLE ERROR in kmsg_send");
     }
 
-    //    kprintf("found blokced proc\n");
-    
+#ifdef SLB_THESIS
+    if ( !p->ring0 ) {
+#endif
       p->recvp = NULL;         /* Set this to NULL (impt for fork)        */
       p->recvfrom = PROC_NONE; /* Set to Non-existent pid (impt for fork) */
 
@@ -156,6 +135,81 @@ void kmsg_send(Message_t *mp) {
 	update_proc_status(p,0,SIG_STOPPED);
 	update_proc_status(p,0,0); /* mark as reported */
       }
+#ifdef SLB_THESIS
+    }
+    else {
+      p->blocked = 0;
+      p->recvp = newmsgp;
+
+      //      kprintf("message for blocked ring0 proc\n");
+
+      /* TODO : need to build new mappings bc the kernel context executing 
+	        this is almost certainly not the one on the proper kernel 
+		core. this should be simplified once we have just 1 kernel 
+		core. */
+      uint64_t mpbuf_virt = vkmalloc(vk_heap, 1);
+      Msg_status_t *mpstatus_virt = (Msg_status_t*)vkmalloc(vk_heap, 1);
+      uint64_t scrbuf_virt = vkmalloc(vk_heap, 1);
+      uint64_t scrbuf_tail_virt = vkmalloc(vk_heap, 1);
+      
+      //      kprintf("attaching pages\n");
+      
+      attach_page_dup(mpbuf_virt, p->mpbuf_phys & ~0xfff, PG_RW);
+      attach_page_dup(mpstatus_virt, (uint64_t)p->mpstatus_phys & ~0xfff, PG_RW);
+      attach_page_dup(scrbuf_virt, p->scrbuf_phys & ~0xfff, PG_RW);
+      attach_page_dup(scrbuf_tail_virt, p->scrbuf_tail_phys & ~0xfff, PG_RW);
+
+      //      kprintf("recovering offsets \n");
+
+      mpbuf_virt |= (p->mpbuf_phys & 0xfff);
+      mpstatus_virt = (Msg_status_t*)((uint64_t)mpstatus_virt | ((uint64_t)p->mpstatus_phys & 0xfff));
+      scrbuf_virt |= (p->scrbuf_phys & 0xfff);
+      scrbuf_tail_virt |= (p->scrbuf_tail_phys & 0xfff);
+
+      //      kprintf("  mpbuf_virt = 0x%x\n", mpbuf_virt);
+      //      kprintf("  mpstatus_virt = 0x%x\n", mpstatus_virt);
+      //      kprintf("  scrbuf_virt = 0x%x\n", scrbuf_virt);
+      //      kprintf("  scrbuf_tail_virt = 0x%x\n", scrbuf_tail_virt);
+
+      /* find where I'm reading */
+      int tail = (*(uint64_t*)scrbuf_tail_virt + 1) % p->sc_rbuf_size;
+
+      //      kprintf("got tail = %d\n", tail);
+
+      /* attach the message */
+      /* deliver it by attaching to process */
+      kmemcpy((void*)mpbuf_virt, p->recvp->buf, p->recvp->len);   /* Copy buf */
+
+      //      kprintf("attached message\n");
+
+      mpstatus_virt->src = p->recvp->src;                /* Update status */
+      mpstatus_virt->bytes_rcvd = p->recvp->len;
+      mpstatus_virt->msgsize_orig = p->recvp->len;
+
+      /* free kernel message */
+      kfree_track(KMSG_SITE,p->recvp->buf);
+      kfree_track(KMSG_SITE,p->recvp);
+
+      p->recvp = NULL;         /* Set this to NULL (impt for fork)        */
+      p->recvfrom = PROC_NONE; /* Set to Non-existent pid (impt for fork) */
+
+      /* tell the proc about the new tail */
+      *(uint64_t*)scrbuf_tail_virt = tail;
+
+      /* do a thing to allow the proc to resume. Due to the current loop/hack 
+	 in asmp_msgrecv, this is how we do that. Later, we might send it an 
+	 IPI to get the core to execute a kernel-controlled handler. TODO */
+      ((Message_t*)scrbuf_virt)[tail].src = 0;
+
+      vkdirty(vk_heap, (vkpage_t*)(mpbuf_virt & ~0xfff), PAGE_SIZE);
+      vkdirty(vk_heap, (vkpage_t*)((uint64_t)mpstatus_virt & ~0xfff), PAGE_SIZE);
+      vkdirty(vk_heap, (vkpage_t*)(scrbuf_virt & ~0xfff), PAGE_SIZE);
+      vkdirty(vk_heap, (vkpage_t*)(scrbuf_tail_virt & ~0xfff), PAGE_SIZE);
+      vkfreedirty(vk_heap);
+      
+      //      kprintf("done in kmsg send\n");
+    }
+#endif
 
   }
   return;
@@ -221,6 +275,13 @@ int kmsg_recv(Proc_t *p, Message_t *mp, int from) {
       rc = 0;
 
       update_proc_status(p,0,STOPPED);
+#ifdef SLB_THESIS
+      if ( p->ring0 ) {
+	p->blocked = 1;
+	break;
+      }
+      else
+#endif      
       ksched_yield();
     }
   }

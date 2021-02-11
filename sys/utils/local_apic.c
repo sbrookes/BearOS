@@ -1,26 +1,3 @@
-/*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
 #include <constants.h>
 #include <kstdio.h>
 #include <pio.h>
@@ -28,10 +5,13 @@
 #include <apic.h>
 #include <asm_subroutines.h>
 #include <tsc.h>
-#include <smp.h>
-#include <semaphore.h>
-/* adapted from  Plan9 */
- 
+/* The code in this file comes from Plan9 */
+
+#ifdef SLB_THESIS
+#include <asmp.h>
+#endif 
+
+
 uint32_t lapic_read(uint32_t offset){
   return *(uint32_t *)(lapicaddr+offset);
 }
@@ -80,19 +60,20 @@ void apic_set_timer(uint32_t cycles, int apic_divisor){
 }
 
 
-int calibrate_apic_timer(void){
+int calibrateAPIC(void){
   unsigned apic, apic_start;
   uint64_t tsc_hz, tsc, tsc_start, HZ;
 
   tsc_hz = get_tsc_freq();
  
-#ifdef DEBUG
-  kprintf("tsc_frequency = %u MHz \n ", ((tsc_hz/1000)/1000));
-#endif
-
   /* This is the frequency the timer will fire.
    * This sets up how fast we switch processes 
    */
+#ifdef SLB_THESIS
+ if (this_cpu() == TEMP_PINNED_PROC_CORE)
+   HZ  = tsc_hz / 10; /* TODO: temp really small hz */
+ else
+#endif
   HZ  = tsc_hz / 100;//0;
   /* TODO: on 9010s, dividing by 10000 causes thrashing */
 
@@ -141,9 +122,18 @@ void lapic_init(){
  kprintf("APIC ID 0x%x \n", ((lapic_read(APIC_APICID)>>24) & 0xFF));
 #endif
 
-#ifdef KERNEL
-      calibrate_apic_timer();
+#ifdef SLB_THESIS
+ /* core 2 is doing the inf kernel loop... it needs interrupts but we dont 
+    want it to do the timer interrupt... so we wont call it here.
+ */
+ if ( (this_cpu() != KERNEL_CORE)
+
+#ifdef MULTICORE_PRINTING
+&& (this_cpu() != PRINTER_CPU) 
 #endif
+) 
+#endif
+   calibrateAPIC();
 
   /*writing a 0 to the high ICR sets it to LAPIC 0 BSP usually.             */
   /*The low ICR tells the APIC what to to do. In this case it sends an init */
@@ -203,7 +193,7 @@ void lapic_start_aps(uint8_t apicid, uint32_t addr){
   kprintf("[APIC] starting apicid = %x at addr = %x\n",apicid,addr);
 #endif
   lapic_write(APIC_ICRH, apicid<<24);
-  lapic_write(APIC_ICRL, APIC_INIT );
+  lapic_write(APIC_ICRL, APIC_INIT | APIC_LEVEL | APIC_ASSERT);
   delay(200);   
 
   lapic_write(APIC_ICRH, apicid<<24);

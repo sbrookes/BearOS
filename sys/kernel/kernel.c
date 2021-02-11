@@ -1,27 +1,4 @@
 /*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
-/*
  * kernel.c
  *
  * Description: The kernel is dedicated to handling interrupts and
@@ -43,7 +20,6 @@
 #include <kmalloc.h>
 #include <memory.h>
 #include <ramio.h>
-#include <ke1000.h>
 #include <procman.h>
 #include <asm_subroutines.h>
 #include <ktime.h>
@@ -66,6 +42,7 @@
 #include <fatfs.h>
 #include <ff_const.h>
 #include <elf.h>
+#include <ke1000.h>
 #include <tsc.h>
 #include <sbin/kbd.h>
 #include <random.h>
@@ -80,6 +57,14 @@
 #include <semaphore.h>
 #include <acpi.h>
 
+#ifdef SLB_THESIS
+#include <asmp.h>
+#endif
+
+#ifdef DRIVER_REFRESH
+#include <refresh.h>
+#endif
+
 #ifdef DIVERSITY
 #include <diversity.h>
 #endif
@@ -91,7 +76,14 @@
 
 /* PRIVATE DECLARATIONS */
 
-int flip __attribute__ ((section (".bss")));
+#ifdef SLB_THESIS
+uint64_t val_phys_addr;
+uint64_t *val_virt_addr;
+
+#ifdef MULTICORE_PRINTING
+void printing_core_kernel_proc(volatile uint64_t arg);
+#endif
+#endif
 
 /* Entry Point */
 void kentry() __attribute__ ((section ("startpoint"))); /* Entry point */
@@ -120,6 +112,22 @@ static void print_debug(char * name){
 
 /* Private Variables */
 void *systick_hooks;
+#ifdef DIVERSITY
+static void print_hash(char *file, unsigned char hash[]);
+#endif
+
+/*	New fix for Dell Bios issues involving spurious intterupt generation.
+ *	this is a flip flop. on the Dell 9010s amd 9020s the bios is configured
+ *	in a way that causes a spurious interrupt to be fired on boot for the
+ *	I/O APIC. Additionally, on the 9020s the bios causes each key press to
+ *	result in 4 interrupts instead of 2, which generates double output 
+ *      to the
+ *	the screen. Of course VMWARE has none of these issues thus complicating
+ *	the solution across now three architectures (RMD)
+ */
+#ifndef VMWARE
+int flip __attribute__ ((section (".bss")));
+#endif
 
 #ifdef ENABLE_SMP
 int bsp_ready_kernel __attribute__ ((section (".bss"))); /* BSP booted */
@@ -141,9 +149,7 @@ void kentry() {
   /* Kernel initialization should not be interrupted */
   asm volatile("cli");
 
-#ifdef DEBUG
   kprintf("[Kernel] Starting\n");
-#endif
 
 #if ENABLE_SMP
   if(bsp_ready_kernel == 1) {
@@ -202,10 +208,23 @@ void kentry() {
   vkshowmap(vk_heap);
 #endif
 
+#ifdef DEMO 
+  kputs("\nKernel diversity check:");
+  kprintf("    address of kentry        : 0x%x\n", kentry);
+  kprintf("    address of load_elf_proc : 0x%x\n", load_elf_proc);
+  kprintf("    address of stack var     : 0x%x\n", &frame_array_address);
+  kprintf("    address of kprintf       : 0x%x\n", kprintf);
+  kprintf("    address of kputs         : 0x%x\n", kputs);
+  kprintf("    address of diversify     : 0x%x\n", diversify);
+  kprintf("    address of lapic_eoi     : 0x%x\n", lapic_eoi);
+  kprintf("    address of kernel heap   : 0x%x\n", frame_array_address);
+#endif
+
   /* initialize the kernel! */
   kinit();
   kpanic("kinit tried to return");
 }
+
 
 Proc_t* gp;
 
@@ -228,6 +247,98 @@ static void ap_core_init() {
   acquire_lock(sem_kernel);
   ksched_yield();
 
+#ifdef SLB_THESIS
+
+  /* we have to send core 2 into userspace first with that ksched_yield() 
+     because before entering and then leaving userspace, it doesnt have its 
+     own kernel stack. */
+
+#ifdef MULTICORE_PRINTING
+  /* send printing core to print */
+  if ( this_cpu() == PRINTER_CPU ) 
+    printing_core_kernel_proc(0);
+#endif
+
+  /* send core 2 into its inf loop */
+  if ( this_cpu() == KERNEL_CORE ) {
+    asm volatile ("sti");
+
+    load_elf_proc_remote("t12");
+    load_elf_proc_remote("t13");
+
+    
+    
+#if 0
+    int i1, i2, i3, i4, i5;
+ 
+    kprintf("paging struct for remote proc\n");
+    for ( i1 = 0; i1 < 512; i1++ ) {
+      if ( ! *(uint64_t*)remote_PML4TE2vaddr(test_ring0_proc, i1) ) 
+	continue;
+
+      kprintf("  %d -> 0x%x\n", i1, *(uint64_t*)remote_PML4TE2vaddr(test_ring0_proc, i1));
+
+      for ( i2 = 0; i2 < 512; i2++ ) {
+	if ( !*(uint64_t*)remote_PDPTE2vaddr(test_ring0_proc, i1, i2) )
+	  continue;
+
+	kprintf("    %d -> 0x%x\n", i2, *(uint64_t*)remote_PDPTE2vaddr(test_ring0_proc, i1, i2));
+
+	for ( i3 = 0; i3 < 512; i3++ ) {
+	  if ( !*(uint64_t*)remote_PDE2vaddr(test_ring0_proc, i1, i2, i3) )
+	    continue;
+
+	  kprintf("      %d -> 0x%x\n", i3, *(uint64_t*)remote_PDE2vaddr(test_ring0_proc, i1, i2, i3));
+	  
+	  for ( i4 = 0; i4 < 512; i4++ ) {
+	    if ( !*(uint64_t*)remote_PTE2vaddr(test_ring0_proc, i1, i2, i3, i4) )
+	      continue;
+
+	    kprintf("        %d -> 0x%x\n", i4, *(uint64_t*)remote_PTE2vaddr(test_ring0_proc, i1, i2, i3, i4));
+	    continue;
+	    for ( i5 = 0; i5 < 512; i5++ )
+	      if ( i1 == 7 ) 
+		continue;
+	      else 
+		kprintf("          0x%x: 0x%x\n", i5*8, *((uint64_t*)remote_idx2vaddr(test_ring0_proc, i1, i2, i3, i4) + i5) );
+	  }
+	}
+      }
+    }
+#endif
+
+    if ( load_ring0_idle_procs() )
+      kpanic("failed to load ring0 idle procs\n");
+
+    /* todo: special scheduling for the idleprocs... in other words, reconcile 
+       these with the "checkin" scheduling mechanism */
+    Proc_t *first_proc = ring0_idleps[TEMP_PINNED_PROC_CORE];
+    Proc_t *next_proc = ksched_get_remote();
+
+    *(uint64_t*)remote2vaddr(first_proc, first_proc->usr_next_proc_cr3) = (uint64_t)next_proc->cr3_target;
+    ring0_proc_ptr_array[TEMP_PINNED_PROC_CORE] = first_proc;
+    ring0_nproc_ptr_array[TEMP_PINNED_PROC_CORE] = next_proc;
+    
+    release_lock(sem_kernel);
+    
+    while ( 1 );
+  }
+  else if ( this_cpu() == TEMP_PINNED_PROC_CORE ) {
+
+    release_lock(sem_kernel);
+
+    while ( !ring0_proc_ptr_array[TEMP_PINNED_PROC_CORE] ) ;
+    
+    /* TODO: no longer need to pass mc_addr to this fn */
+    kernel_to_ring0_proc(
+		     ring0_proc_ptr_array[TEMP_PINNED_PROC_CORE]->cr3_target, 
+		     ring0_proc_ptr_array[TEMP_PINNED_PROC_CORE]->usr_gdtp, 
+		     ring0_proc_ptr_array[TEMP_PINNED_PROC_CORE]->usr_idtp);
+    
+    kpanic("jump to ring0 proc failed!\n");
+  }
+
+#endif
 
   kernel_exit();
 
@@ -250,7 +361,7 @@ static void kinit() {
   kmalloc_clear_sites();
 #endif
 
-#ifdef KVMEM_TRACKING
+#ifdef VMEM_TRACKING
   vmem_clear_sites();
 #endif
 
@@ -284,9 +395,9 @@ static void kinit() {
   add_all_intr_handlers();
 
   print_debug("APIC initialization");
-
   /*use this address if we're virtualizing in the hypervisor
    *eventually we have to vmcall for it from hypv */
+
   if( attach_page(lapicaddr,lapicaddr, KMEM_IO_FLAGS | PG_GLOBAL) )
     kpanic("[SMP] failed to add page location of APIC");
   lapic_init();
@@ -339,21 +450,43 @@ static void kinit() {
    */
   print_debug("Random Number initialization ");
   srandom(readtsc());
+  /* Initialize the refresh module. */
+#ifdef DRIVER_REFRESH
+  print_debug("Refresh initialization ");
+  refresh_init();
+#endif /* DRIVER_REFRESH */
 
 #ifdef ENABLE_SMP
   smp_boot_aps();
 #endif
 
   /*** SYSTEM PROCESSES ***/
+#ifndef REMOTE
   kload_daemon("vgad",VGAD, PL_0 /* IO_FLAGS_ENABLED */);	/* VGAD = -5 */
   kload_daemon("kbd",KBD, PL_0 /* IO_FLAGS_ENABLED */);	/* KBD = -6 */
   ioapicenable(1, 0); /*enables the keyboard interrupt*/
+#endif /* not REMOTE */
+#ifndef STANDALONE
+  kload_daemon("netd",NETD, PL_3 /* IO_FLAGS_DISABLED */);	/* NETD = -7 */
+
+  /* Start the network, if any network interfaces are present.
+   * This code relies on interrupts, klog,kmsg, timers, and the existence
+   * of the netd and sysd processes; DON'T MOVE THIS UP IN KINIT.
+   */
+  print_debug("Network Drivers initialization");
+  network_init();		/* E1000D = -8 */
+#ifdef BEARNFS
+  kload_daemon("nfsd",NFSD, PL_3 /* IO_FLAGS_DISABLED */);	/* NFSD = -9 */
+  kload_daemon("statd",STATD, PL_3 /* IO_FLAGS_DISABLED */);	/* STATD = -10 */
+#endif /* BEARNFS */
+#endif /* STANDALONE */
 
   print_debug("SYSD initialization");
-  kload_daemon("sysd",SYSD, PL_3 /* IO_FLAGS_DISABLED */);/* INITD = -11 -- tracked */
+  kload_daemon("sysd",SYSD, PL_3 /* IO_FLAGS_DISABLED */);	/* INITD = -11 -- tracked */
+  //  kload_daemon("rmpd"); 		/* rmpd.h: RMPD = -11 */
 
   print_debug("PIPED Initialization\n");
-  kload_daemon("piped",PIPED, PL_3 /* IO_FLAGS_DISABLED */);  /* PIPED = -12 */
+  kload_daemon("piped",PIPED, PL_3 /* IO_FLAGS_DISABLED */);	/* PIPED = -12 */
 
   /* 
    * Load the hypervisor shim that enables execute-only
@@ -369,7 +502,7 @@ static void kinit() {
   ksched_add(shim_p);
 #else
 #ifdef XONLY_BEAR_HYPV
-  kvmcall(9, (uint64_t)NULL, NULL);
+  kvmcall(9, NULL, NULL);
 #endif
 #endif	/* HYPV_SHIM */
 
@@ -452,6 +585,16 @@ Proc_t *kernel_exit() {
 void systick_handler(unsigned int vec, void *varg) {
   Proc_t *p;
 
+#ifdef SLB_THESIS
+  /* don't do anything for cores running kernel loops */
+  if ( (this_cpu() == KERNEL_CORE)
+#ifdef MULTICORE_PRINTING
+       || (this_cpu() == PRINTER_CPU) 
+#endif
+       )
+    return;
+
+#endif
 
   p = ksched_get_last();
 
@@ -462,12 +605,12 @@ void systick_handler(unsigned int vec, void *varg) {
 
   /* Run hooks. */
   qapply(systick_hooks, systick_run_hooks);
-
+  //p = ksched_schedule();
   ksched_yield();
   p = ksched_get_last();
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: systick_hook_add(systick_hook)
  *
@@ -475,19 +618,19 @@ void systick_handler(unsigned int vec, void *varg) {
  *  Adds a hook that is called every time the systick fires. The hook must
  *  be void and take no arguments.
  *
- *****************************************************************************/
+ ******************************************************************************/
 void systick_hook_add(systick_hook hook) {
   qput(systick_hooks, hook);
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: systick_hook_remove(systick_hook)
  *
  * Description:
  * Removes a previously-added systick hook from the systick hook list.
  *
- *****************************************************************************/
+ ******************************************************************************/
 void systick_hook_remove(systick_hook hook) {
   qremove(systick_hooks, systick_search_hooks, hook);
 }
@@ -506,7 +649,7 @@ static void systick_run_hooks(void *hp) {
   hook();
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: interrupt(unsigned int vec, void *varg)
  *
@@ -521,7 +664,7 @@ static void systick_run_hooks(void *hp) {
  *    vec -- the interrupt number
  *    varg -- the user process assigned to this interrupt
  *
- *****************************************************************************/
+ ******************************************************************************/
 void interrupt(unsigned int vec, void *varg) {
   pid_t pid;
   Message_t msg;
@@ -537,20 +680,24 @@ void interrupt(unsigned int vec, void *varg) {
   }
 
   /*Architecture Support for Keyboard driver (RMD)*/
+#ifndef VMWARE
   if(vec == 0x21 ){
     code = inb(0x60);       /* get the scan code for the key struck */
-
-#if 0
-    // per https://forum.osdev.org/viewtopic.php?f=1&t=40001 ... not needed
     val = inb(0x64);         /* strobe the keyboard to ack the char  */
     outb(0x64, val | 0x80);  /* strobe the bit high                  */
     outb(0x64, val);           /* now strobe it low                    */
-#endif
+#ifdef DELL_9020_KBD_FIX
+    flip^=0x1;
+    if(flip == 1)
+      kernel_exit();
+#else
     if(flip == 0){
       flip++;
       kernel_exit();
     }
+#endif /*DELL_9020_KBD_FIX */
   }
+#endif /*VMWARE*/
 
   msg.src = HARDWARE;		/* src process -2 in usr/include/syspid.h */
   msg.dst = dst_p->pid;		/* dst is who its going to */
@@ -572,6 +719,134 @@ void interrupt(unsigned int vec, void *varg) {
   kmsg_send(&msg);
 }
 
+#ifdef SLB_THESIS 
+void asmp_kernel_syscall(Message_t *mp, Proc_t *cp) {
+
+  Systask_msg_t *msg;
+  Msg_status_t status;
+  int msgtype;
+  int fn = mp->direction;
+
+  if ( mp == NULL ) { /* access message */
+    kprintf("Empty system call\n");
+    return;
+  }
+  if(fn!=MSEND && fn!=MRECV) { 	/* invalid message */
+    kprintf("Invalid ASMP system call\n");
+    return;
+  }
+
+  if(fn==MRECV)  /* recv(frompid,msg) */
+    kmsg_recv(cp, mp, mp->src);
+  else {			/* fn == MSEND */
+    if(mp->dst == SYS) {	/* system call? */
+      msg = mp->buf;		/* get message data  */
+      status.src = cp->pid; /* set up return values for msgrecv from syscall */
+
+      status.bytes_rcvd = mp->len;
+      status.msgsize_orig = mp->len;
+      /*
+       * NOTE: compiler generates jump table -- do not optimize
+       */
+      msgtype = *(int*)(mp->buf);	/* get message type */
+      switch(msgtype) {	        	/* which system call? */
+      case SC_FORK:
+	systask_do_fork(msg,&status);
+	break;
+      case SC_EXEC:
+	systask_do_exec(msg,&status);
+	break;
+      case SC_GETPID:
+	systask_do_getpid(msg,&status);
+	break;
+      case SC_WAITPID:
+	systask_do_waitpid(msg,&status);
+	break;
+      case SC_EXIT:
+	systask_do_exit(msg,&status);
+	break;
+      case SC_KILL:
+	systask_do_kill(msg,&status);
+	break;
+      case SC_USLEEP:
+	systask_do_usleep(msg,&status);
+	break;
+      case SC_VGAMEM:
+	systask_do_map_vga_mem(msg,&status);
+	break;
+      case SC_REBOOT:
+	systask_do_reboot(msg,&status);
+	break;
+      case SC_UNMASK:
+	systask_do_unmask_irq(msg,&status);
+	break;
+      case SC_EOI:
+	systask_do_eoi(msg,&status);
+	break;
+      case SC_GETTIME:
+	systask_do_gettime(msg,&status);
+	break;
+      case SC_UMALLOC:
+	systask_do_umalloc(msg,&status);
+	break;
+      case SC_PCI_SET:
+	systask_do_pci_set_config(msg,&status);
+	break;
+      case SC_POLL:
+	systask_do_poll(msg,&status);
+	break;
+      case SC_CORE:
+	systask_do_get_core(msg,&status);
+	break;
+      case SC_PS:
+	systask_do_ps(msg,&status);
+	break;
+      case SC_GETSTDIO:
+	systask_do_getstdio(msg,&status);
+	break;
+      case SC_REDIRECT:
+	systask_do_redirect(msg,&status);
+	break;
+      case SC_SIGACT:
+	systask_do_sigaction(msg,&status);
+	break;
+      case SC_SIGRET:
+	systask_do_sigreturn(msg,&status);
+	break;
+      case SC_ALARM:
+	systask_do_alarm(msg, &status);
+	break;
+#ifdef KERNEL_DEBUG
+      case SC_PRINTINT:
+	systask_do_kprintint(msg,&status);
+	break;
+      case SC_PRINTSTR:
+	systask_do_kprintstr(msg,&status);
+	break;
+#endif
+      case SC_MAP_MMIO:
+	systask_do_map_mmio(msg, &status);
+	break;
+      case SC_MAP_DMA:
+	systask_do_map_dma(msg, &status);
+	break;
+      case SC_MSI_EN:
+	systask_do_msi(msg, &status);
+	break;
+      default:
+	kprintf("%d: Invalid system call - %d\n",cp->pid,msgtype);
+	break;
+      }
+    }
+    else {		       /* send to a process */
+      mp->src = cp->pid;       /* record sending process in message */
+      kmsg_send(mp);	       /* Perform the send */
+    }
+  }
+
+  return;
+}
+#endif
 
 void kernel_syscall(unsigned int vec, void *varg) {
   Proc_t *cp;
@@ -707,19 +982,66 @@ void kernel_syscall(unsigned int vec, void *varg) {
 extern void poke_vmm();
 static void add_all_intr_handlers() {
 
+#ifndef VMWARE
   flip = 0;
+#endif
 
   /* Initialize hook queue before the systick handler is turned on. */
   systick_hooks = qopen();
 
   /* Now turn on the interrupts. Args are always passed as void* */
   intr_add_handler(0x20, &systick_handler, NULL); /* APIC timer */
+#ifndef REMOTE
   intr_add_handler(0x21, &interrupt, (void*)KBD); /* kbd hardware */
+#endif
   intr_add_handler(0x80, &kernel_syscall, NULL);  /* system call */
 
+#ifdef SLB_THESIS
+  intr_add_handler(0xa5, &kernel_syscall_handler, NULL);
+  intr_add_handler(0xa4, &kernel_syscall_handler, NULL);
+  intr_add_handler(0xFF, &kernel_syscall_handler, NULL);
+  intr_add_handler(0xb1, &kernel_syscall_handler, NULL);
+  intr_add_handler(0xF0, &kernel_syscall_handler, NULL);
+  intr_add_handler(0xc0, &kernel_syscall_handler, NULL);
+  intr_add_handler(0xc1, &kernel_syscall_handler, NULL);
+
+#if defined(MULTICORE_PRINTING)
+  /* set printing interrupt handler */
+  intr_add_handler(PRINTING_IPI, &printer_cpu_service, NULL);
+#endif
+
+#endif
+
+  /* Forensics */
+  intr_update_idtentry(0x7D, INTR64_ON, (uint64_t)poke_vmm); /* vmcall */
+  /*
+   * Set 0x81 to the syscall handler. This alternate syscall vector is
+   * used by fork and exec; this makes it easy for the hypervisor to
+   * see when they occur.  Technically, someone could get around this
+   * by not using the library syscall, but this mechanism doesn't need
+   * to be perfectly robust (it's what the hypv DOES with that info
+   * that is the research part; NOT how it gets it).
+   */
+  intr_add_handler(0x81, &kernel_syscall, NULL); /* forensics */
+}
+#ifdef DIVERSITY
+
+#define HASHPRTLEN 4
+static void print_hash(char *name, unsigned char hash[]) {
+  int idx;
+
+  kprintf("[%s\tHash: ", name);
+  for(idx=0; idx<32 ; idx++) {
+    if(idx<HASHPRTLEN || idx>=(32-HASHPRTLEN))
+      kprintf("%x", hash[idx]);
+    if(idx==HASHPRTLEN) 
+      kprintf(" ... ");
+  }
+  kprintf("]");
 
   return;
 }
+#endif
 
 /**
  * kstart()
@@ -1229,9 +1551,15 @@ static void install_shim() {
 				      (1 << PROC_SEC_ENABLE_RDTSCP) |
 				      (1 << PROC_SEC_ENABLE_VPID)));
   
+  
+#ifdef DEBUG_SHIM
+  //  kprintf("physical ept pointer = 0x%x\n", virt2phys(pml4t));
+#endif
+
   vmwrite(EPT_POINTER, (virt2phys(pml4t) | 6 | (3 << 3)));
   vmwrite(EPT_POINTER_HIGH, (virt2phys(pml4t) >> 32));
   
+  //  vmwrite(EXCEPTION_BITMAP, ~(uint32_t)0);
   vmwrite(CR0_GUEST_HOST_MASK, 0);
   vmwrite(CR4_GUEST_HOST_MASK, 0);
 
@@ -1240,8 +1568,7 @@ static void install_shim() {
 #ifdef DEBUG_SHIM
   kprintf("shim cr0 0x%x cr3 0x%x cr4 0x%x\n", read_cr0(), read_cr3(), read_cr4());
 #endif
-
-  /* -------- Host Processor State -------- */
+ /* -------- Host Processor State -------- */
   /* These shouldn't ever change from what we get after entering long mode. */
   vmwrite(HOST_CS_SELECTOR,          0x8);
   vmwrite(HOST_DS_SELECTOR,          0x10);
@@ -1257,9 +1584,9 @@ static void install_shim() {
   vmwrite(HOST_IDTR_BASE,            idt.base);
   vmwrite(HOST_RIP,                  (uint64_t)death_handler);
   vmwrite(HOST_RSP,                  system_stack_base);
-
   /* -------- Guest processor state. -------- */
   /* For now, these should be the same as the host. */
+
   vmwrite(GUEST_CS_SELECTOR, 0x8);
   vmwrite(GUEST_DS_SELECTOR, 0x10);
   vmwrite(GUEST_SS_SELECTOR, 0x10);
@@ -1286,6 +1613,7 @@ static void install_shim() {
   vmwrite(GUEST_FS_AR_BYTES,         0b1100000010010011);
   vmwrite(GUEST_GS_AR_BYTES,         0b1100000010010011);
   
+
   vmwrite(GUEST_LDTR_SELECTOR,       0);
   vmwrite(GUEST_LDTR_BASE,           0);
   vmwrite(GUEST_LDTR_LIMIT,          0);
@@ -1296,6 +1624,7 @@ static void install_shim() {
   vmwrite(GUEST_IDTR_BASE,           idt.base);
   vmwrite(GUEST_IDTR_LIMIT,          idt.limit);
   
+  
   vmwrite(GUEST_TR_BASE,             gdt.base + TSS_ENTRY_OFFSET - 0xA0);
   vmwrite(GUEST_TR_LIMIT,            0x0067);
   vmwrite(GUEST_TR_AR_BYTES,         0x108b);
@@ -1304,23 +1633,19 @@ static void install_shim() {
   kprintf("next proc cr3 0x%x\n",next_proc.cr3_target);
   kprintf("rip 0x%x rsp 0x%x\n", next_proc.kmc.rip, next_proc.kmc.rsp);
 #endif
-
   /* This gives the entry point to the guest! */
   vmwrite(GUEST_RIP,                 next_proc.kmc.rip);
   vmwrite(GUEST_RSP,                 next_proc.kmc.rsp);//system_stack_base);
-
   /* Control registers, for now, identical to host. */
-  vmwrite(GUEST_CR0,                 read_cr0());
+  vmwrite(GUEST_CR0,                 read_cr0());// | (1 << 5) | (1 << 3));
   vmwrite(GUEST_CR3,                 (uint64_t)next_proc.cr3_target);
-  vmwrite(GUEST_CR4,                 read_cr4());
-
+  vmwrite(GUEST_CR4,                 read_cr4());/* | read_msr(IA32_VMX_CR4_FIXED0)
+						    & read_msr(IA32_VMX_CR4_FIXED1));*/
   /* RFLAGS sanity check. */
   vmwrite(GUEST_RFLAGS,              next_proc.kmc.eflags & ~(1 << 9));
-
   /* -------- VM entry/exit controls -------- */
   vmwrite(VM_ENTRY_CONTROLS,         ((uint32_t)read_msr(IA32_VMX_TRUE_ENTRY_CTLS) | (1 << 9)));
   vmwrite(VM_EXIT_CONTROLS,          ((uint32_t)read_msr(IA32_VMX_TRUE_EXIT_CTLS) | (1 << 9) | (1 | 15)));
-
   /* -------- Miscellania -------- */
   vmwrite(VMCS_LINK_POINTER,         ~0UL);
 
@@ -1337,9 +1662,30 @@ static void install_shim() {
 #ifdef DEBUG_SHIM
   kputs("[Shim] launching vproc");
 #endif
+#if 0
+  asm volatile("movq %0, %%rax \n\t"
+	       "fxrstor %rax \n\t"
+	       "movq %1, %%rax \n\t"
+	       "movq %2, %%rbx \n\t"
+	       "movq %3, %%rcx \n\t"
+	       "movq %4, %%rdx \n\t"
+	       "movq %5, %%rsi \n\t"
+	       "movq %6, %%rdi \n\t"
+	       "movq %7, %%r8 \n\t"
+	       "movq %8, %%r9 \n\t"
+	       "movq %9, %%r10 \n\t"
+	       "movq %10, %%r11 \n\t"
+	       "movq %11, %%r12 \n\t"
+	       "movq %12, %%r13 \n\t"
+	       "movq %13, %%r14 \n\t"
+	       "movq %14, %%r15 \n\t"
+	       "movq %15, %%rbp \n\t")
+
+#endif
 
   asm volatile("movq %0, %%rbp" : "=m" (next_proc.kmc.rbp));
 
+  //    restore_kernel_from_shim(&next_proc);
   asm volatile("vmlaunch");
 
 #ifdef DEBUG_SHIM
@@ -1353,6 +1699,7 @@ static void install_shim() {
 #endif
 
   death_handler();
+
 
   return;
 }
@@ -1373,4 +1720,43 @@ static int is_nic(void *ep, const void *keyp) {
   return 0;
 }
 
+#endif
+
+
+#ifdef SLB_THESIS
+#ifdef MULTICORE_PRINTING
+void printing_core_kernel_proc(volatile uint64_t arg) {
+
+  if ( this_cpu() != PRINTER_CPU ) {
+    kprintf("WTF WHY IS CPU %d here?!\n", this_cpu());
+    asm volatile("hlt");
+  }
+
+  /* make sure interrupts are enabled on this core. */
+
+  kprintf("******* About to enable multicore printing! *********\n");
+
+  /* initialize multicore printing */
+  printer_cpu_init();
+
+  kprintf("done.\n");
+
+  /* release the lock so that other cores can get into the kernel */
+  release_lock(sem_kernel);
+
+  /* busy wait... */
+  /* TODO: In theory, this core could actually just keep doing other work with 
+     no problem... */
+  while (1) {
+    asm volatile("sti");
+
+    /* busy wait a while */
+    for ( arg = 0xfffffff; arg; arg-- ) ;
+  }
+
+  /* never reached */
+  kprintf("printing core is leaving its loop fn for some reason\n");  
+  return;
+}
+#endif
 #endif

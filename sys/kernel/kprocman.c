@@ -1,34 +1,11 @@
-/*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
-/******************************************************************************
+/*******************************************************************************
  * Filename: procman.c
  *
  * Description: Contains all the code for managing processes and scheduling.
  *              This includes swapping processes, creating new processes,
  *              destroying processes, suspending processes, etc.
  *
- *****************************************************************************/
+ ******************************************************************************/
 
 #include <constants.h>            /* For  eflags constants  */
 #include <memory.h>
@@ -60,9 +37,9 @@
 
 uint64_t* temp_child_heap_ptr;
 
-/******************************************************************************
- ***************************** PRIVATE DECLARATIONS ***************************
- *****************************************************************************/
+/*******************************************************************************
+ ***************************** PRIVATE DECLARATIONS ****************************
+ ******************************************************************************/
 
 /* A simple table structure for looking up a Proc_t given a pid.  
  * The key is the pid. I assume that the PIDs are evenly distributed,
@@ -71,49 +48,46 @@ uint64_t* temp_child_heap_ptr;
 #define PLUT_SLOTS 64
 #define HASH_FUNC(n) ((n) % PLUT_SLOTS)
 static hashtable_t *proc_htable;
-static void lut_init();                 /* init the lut                     */
+static void lut_init();                 /* init the lut                       */
 
 static void new_cr3_target(Proc_t *p, int clone);
 
-/* the first new_proc should use the currently loaded cr3 target since there 
-   is already a kernel there. This variable will help us decide when we need 
-   to start making new tables in new_proc */
+/* the first new_proc should use the currently loaded cr3 target since there is 
+   already a kernel there. This variable will help us decide when we need to 
+   start making new tables in new_proc */
 static int first = 1;
 
-/******************************************************************************
- *************************** FUNCTION DEFINITIONS *****************************
- *****************************************************************************/
+/*******************************************************************************
+ **************************** FUNCTION DEFINITIONS *****************************
+ ******************************************************************************/
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: get_proc_lut()
  *
  * Description: returns the proc_lut memory location
  *              fixes ps
  *
- *****************************************************************************/
+ ******************************************************************************/
 hashtable_t *get_proc_lut(){
   return proc_htable;
 }
 
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: sched_init()
  *
  * Description: Initialize all data structures, counters, etc. associated with
  *              the scheduler.
  *
- *****************************************************************************/
+ ******************************************************************************/
 void procman_init() {
-
   /* Init the pid-to-proc_t lookup table */
   lut_init();
-
 #ifdef DEBUG
   kprintf("[Procman] Initialized the Process Look Up Table\n");
 #endif
-
   /* Tracks the next user PID to be used... better not roll over... */
   /*
    * This is at a static address to facilitate forensics (Steve K's work). 
@@ -125,12 +99,10 @@ void procman_init() {
 
   /* Initialized the number of issued user pages to zero */
   number_of_issued_pages = 0;
-
 #ifdef DEBUG
   kprintf("	[Procman] Process array addr %x\n", proc_htable);
 #endif
 
-  return;
 }
 
 static void copy_mapping_q(void *childq, void *elementp) {
@@ -150,7 +122,7 @@ Proc_t *new_kernel_proc(uint64_t code_pointer, pid_t pid) {
 
   Proc_t *p;
 
-  p = kmalloc_track(PROCMAN_SITE,sizeof(Proc_t)); /* Allocate Proc Structure */
+  p = kmalloc_track(PROCMAN_SITE,sizeof(Proc_t));                /* Allocate Process Structure */
   kmemset(p,0,sizeof(Proc_t));
 
   p->pl = PL_0;
@@ -167,6 +139,8 @@ Proc_t *new_kernel_proc(uint64_t code_pointer, pid_t pid) {
   /* need to assign rip */
   p->kmc.rip = (reg_t)code_pointer;
 
+  /* now we have stuff we have to do for the proc no matter what */
+
   p->pid = pid;                                         /* Use supplied pid */
 
   /* when ksched yielding we transfer laterally from one proc kernel to another
@@ -179,21 +153,39 @@ Proc_t *new_kernel_proc(uint64_t code_pointer, pid_t pid) {
   return p;
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: new_proc
  *
  * Description: Initializes a new proc_t structure.
  *
- *****************************************************************************/
+ ******************************************************************************/
+
+#ifdef SLB_THESIS
+/* prototype for new proc implementation function */
+Proc_t *new_proc_imp(uint64_t code_pointer, int pl, pid_t pid, Proc_t *parent, int ring0_proc);
+#endif
 
 Proc_t *new_proc(uint64_t code_pointer, int pl, pid_t pid, Proc_t *parent) {
 
+#ifdef SLB_THESIS
+  return new_proc_imp(code_pointer, pl, pid, parent, 0);
+}
+
+Proc_t *new_ring0_proc(uint64_t code_pointer, int pl, pid_t pid, Proc_t *parent) {
+  return new_proc_imp(code_pointer, pl, pid, parent, 1);
+}
+
+Proc_t *new_proc_imp(uint64_t code_pointer, int pl, pid_t pid, Proc_t *parent, int ring0_proc) {
+#endif
+
   Proc_t *p;
   int i, clone;
+#ifdef SLB_THESIS
+  uint64_t *vcr3;
+#endif
 
-  /* Allocate Process Structure */
-  p = kmalloc_track(PROCMAN_SITE,sizeof(Proc_t));
+  p = kmalloc_track(PROCMAN_SITE,sizeof(Proc_t));                /* Allocate Process Structure */
   kmemset(p,0,sizeof(Proc_t));
 
   p->argc = 0;
@@ -244,7 +236,6 @@ Proc_t *new_proc(uint64_t code_pointer, int pl, pid_t pid, Proc_t *parent) {
     kmemset(p->sigact, 0, _NSIG * sizeof(struct sigaction));
   }
   else { /* for a clone, copy parent structures */
-
     kmemcpy(p, parent, sizeof(Proc_t));
 
     p->argv = kmalloc_track(PROCMAN_SITE, parent->argc*sizeof(char*));
@@ -263,14 +254,13 @@ Proc_t *new_proc(uint64_t code_pointer, int pl, pid_t pid, Proc_t *parent) {
       kstrncpy((char*)ptr, ((char**)parent->env)[i], kstrlen(((char**)parent->env)[i]) + 1);
       ptr += kstrlen(((char**)parent->env)[i]) + 1;
     }
-    
   } 
-
-  /* now we have stuff we have to do for the proc no matter what */
 
   /* need to assign rips to proc depending on clone or not */
   p->mc.rip = (reg_t)(clone ? parent->mc.rip : code_pointer /* to be overwritten in load_elf_proc */);
   p->kmc.rip = (reg_t)(clone ? (void*)kernel_exit : (void*)kstart);
+
+  /* now we have stuff we have to do for the proc no matter what */
 
   /* initialize the memory region queue */
   p->mapped_memory_regions = qopen();
@@ -289,12 +279,37 @@ Proc_t *new_proc(uint64_t code_pointer, int pl, pid_t pid, Proc_t *parent) {
   if ( p->pid != IDLE_PROC )
     kwait_new(p->pid, parent ? parent->pid : 0);
 
+#ifdef SLB_THESIS
+  if ( ring0_proc )
+    p->kmc.sse = pes_new_save(&(p->pes_hack_kernel));
+  else
+#endif
   p->mc.sse = pes_new_save(&(p->pes_hack_user));  /* FPU/MMX/SSE save area */
 
   /* posix says that even clones get fresh copies of these */
   sigemptyset(&(p->sigpending));
   sigemptyset(&(p->sigdispatch));
 
+#ifdef SLB_THESIS
+  p->vmem_bridge_idx = -1;
+  if ( ring0_proc ) {
+
+    p->ring0 = 1;
+
+    p->cr3_target = (struct page_map_level_4_table*)get_free_frame();
+
+    /* set up a vmem bridge for the proc */
+    vmem_bridge(p);
+
+    /* zero cr3 target */
+    kmemset(remote_PML4TE2vaddr(p, 0), 0, PAGE_SIZE);
+
+    if ( clone ) {
+      ;    /* TODO: look through memory of cloning proc and vmem_alloc_remote matching regions, then copy mem over.. */
+    }
+  }
+  else
+#endif
   new_cr3_target(p, clone);
 
   update_proc_status(p,0,CONTINUED);
@@ -631,6 +646,7 @@ static void new_cr3_target(Proc_t *p, int clone) {
       searchval = (uint64_t)PDPTE2vaddr(pml4t_idx, 0);
       addrs = (addr_pair*)qsearch(addr_q, find_kplt_fn, &searchval);
       if ( !addrs ) {
+	//		kprintf("did not find a pdpt\n");
 	TEMP_MAP(pdpt_phys, pdpt_virt, PDPTE2vaddr(pml4t_idx, 0));
 	kmemset((void*)pdpt_virt, 0, PAGE_SIZE);
 	setup_table((void*)pdpt_phys, (void*)(pml4t_virt + (sizeof(union pt_entry)*pml4t_idx)), PG_RW | PG_USER);
@@ -682,7 +698,9 @@ static void new_cr3_target(Proc_t *p, int clone) {
       kfree(addrs);
     }
 
-    qclose(addr_q);    
+    qclose(addr_q);
+
+    
     
 #undef TEMP_MAP
 
@@ -735,7 +753,7 @@ void set_iopl(Proc_t *p,int pl) {
  *
  *****************************************************************************/
 Proc_t *clone_proc(Proc_t *parent) {
-
+  
   return new_proc(0, 0, PROC_NONE, parent);
 }
 
@@ -750,7 +768,7 @@ void destroy_proc(Proc_t *p, int estatus) {
 
   int i;
   struct memory_region *mr;
-  
+
   if ( estatus != SOME_EXEC_CONSTANT ) {
     if ( !((p->status & SIG_EXITED) == SIG_EXITED) )
       update_proc_status(p, estatus, EXITED);
@@ -792,31 +810,31 @@ void destroy_proc(Proc_t *p, int estatus) {
 
   /* Process lookup */
   lut_remove(p->pid);
-  
+
   /* proc structure and cr3 frame freed by the grim reaper */
 
   return;
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: lut_init()
  *
  * Description: FIXME: Write me
  *
- *****************************************************************************/
+ ******************************************************************************/
 static void lut_init() {
   proc_htable = hopen(PLUT_SLOTS);
   return;
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: lut_add(Proc_t*)
  *
  * Description: Add a proc_t to the pid-to-proc_t lookup table
  *
- *****************************************************************************/
+ ******************************************************************************/
 void lut_add(Proc_t *p) {
 
   if ( p->pid == IDLE_PROC )
@@ -826,14 +844,14 @@ void lut_add(Proc_t *p) {
   return;
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: lut_remove(pid_t)
  *
  * Description: Removes a proc from the lookup table.  Does not deallocate the
  *              proc_t; that is up to the caller if necessary.
  *
- *****************************************************************************/
+ ******************************************************************************/
 void lut_remove(pid_t tpid) {
 
   if ( tpid == IDLE_PROC )
@@ -843,13 +861,13 @@ void lut_remove(pid_t tpid) {
   return;
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: pid_to_addr(pid_t)
  *
  * Description: Given a pid, return the address of the Proc_t structure or NULL
  *
- *****************************************************************************/
+ ******************************************************************************/
 Proc_t *pid_to_addr(pid_t n) {
   Proc_t *p;
 
@@ -897,4 +915,3 @@ void add_memory_region(Proc_t *p, int type, int flags, uint64_t start,
 
   return;
 }
-

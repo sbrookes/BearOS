@@ -1,27 +1,4 @@
 /*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
-/*
  * ksyscall.c -- Implements the core system calls provided by the kernel.
  *
  */
@@ -70,10 +47,12 @@ static int  _do_kill(Proc_t*, int);
 
 /* wakes a process after sleeping */
 static void systask_unsleep(void*);        
-
 /* Wakes proc after waiting    */ 
 static void systask_unwait(Proc_t*, int, int,unsigned int); 
 
+#ifdef FIRMWARE_REFRESH
+static void dump_nic_firmware( uint64_t mmio_start_addr, uint64_t mmio_size);
+#endif
 /*
  * systask_msgsend() - Invokes the user-process send mechanism,
  * allowing the systask to send a message to a user process.  This is
@@ -100,9 +79,9 @@ static inline int systask_msgsend(int dst, void *m, int sz) {
   return 0;
 }
 
-/******************************************************************************
- *************************** SYSCALL SERVICE ROUTINES *************************
- *****************************************************************************/
+/*******************************************************************************
+ **************************** SYSCALL SERVICE ROUTINES *************************
+ ******************************************************************************/
 
 /*
  * systask_do_fork(Proc_t*, Message_t*)
@@ -114,31 +93,28 @@ void systask_do_fork(Systask_msg_t *msg, Msg_status_t *status) {
 
   parent = pid_to_addr(status->src);
 
+  //  kputs("going to test execute only");
+  //  kprintf("load_elf_proc = 0x%x, virt2phys=0x%x\n", *(uint64_t*)load_elf_proc, virt2phys(load_elf_proc));
+
   /* Clone proc structures */
   np = clone_proc(parent);
   if(np == NULL) {
     kpanic("[KERNEL] - Warning fork failed");
   }
-
   /* Is the proc waiting on a msgrecv? */
   if (np->recvp == NULL) {/* Not waiting on a msgrecv */
     ksched_add(np);
   } 
   else {/* Waiting on a msgrecv     */
     int ret;
-
     ret = kmsg_recv(np,np->recvp, np->recvfrom);
     if (ret)
       ksched_unblock(np);
   }
-
   resp.type = SC_FORK;
-
   /* start the parent */
   resp.ret = np->pid;
   systask_msgsend(parent->pid, &resp, sizeof(Fork_resp_t));
-
-
   /* start the child */
   resp.ret  = 0;
   systask_msgsend(np->pid, &resp, sizeof(Fork_resp_t));
@@ -159,7 +135,11 @@ void systask_do_exec(Systask_msg_t *msg, Msg_status_t *status) {
   Proc_t *p, *np;
   int i;
 
+#if !defined(MINIMAL) && !defined(STANDALONE)
+  char *bin_location;
+#endif
   char fname[MAX_FNAME_SZ];
+
 
   p = pid_to_addr(status->src);	/* p points to copy of parent */
   req = (Exec_req_t *)msg;
@@ -168,6 +148,7 @@ void systask_do_exec(Systask_msg_t *msg, Msg_status_t *status) {
   /* Race in elf_load at end? req->fname not valid when we reach there... */
   kstrncpy(fname, req->fname, MAX_FNAME_SZ);
 
+#if ((defined(MINIMAL)) || (defined(STANDALONE)))
   FILINFO ramstatus;
   /* go to the ram disk */
   if(f_stat(fname,&ramstatus)!=0) {
@@ -176,8 +157,22 @@ void systask_do_exec(Systask_msg_t *msg, Msg_status_t *status) {
     systask_msgsend(p->pid, &resp, sizeof(Exec_resp_t));
     return;
   }
+#else
+  /* Kmalloc enough memory to hold the binary */
+  if((bin_location = (char*)kmalloc_track(SYS_TASK_SITE,req->binary_size))==NULL) {
+    resp.type = SC_EXEC;
+    resp.ret = -1;
+    systask_msgsend(p->pid, &resp, sizeof(Exec_resp_t));
+    return;
+  }
 
+  /* Copy the binary */
+  kmemcpy(bin_location, (void*)(req->binary_location), req->binary_size);
 
+  /* Set the pointer in BINARY_LOCATION accordingly */
+  *(uint64_t *)BINARY_LOCATION = (uint64_t)bin_location;
+
+#endif /* MINIMAL or STANDALONE */
   np = new_proc(USR_TEXT_START, p->pl, TEMP_PID, p->parent);
   np->argc = req->argc;
 
@@ -211,7 +206,11 @@ void systask_do_exec(Systask_msg_t *msg, Msg_status_t *status) {
   /* Load the code in, and diversify if necessary 
    * Afterwards, we setup the ARGV and ENVIRON
    */
+#if (defined(STANDALONE) || defined(MINIMAL))
   np->is_in_mem = 0;
+#else
+  np->is_in_mem = 1;
+#endif
 
   setprocname(np, fname);
 
@@ -236,7 +235,6 @@ void systask_do_getpid(Systask_msg_t *msg, Msg_status_t *status) {
   Getpid_resp_t resp;
   resp.type = SC_GETPID;
   user_proc = ksched_get_last();
-
   /*
    * this is for signaling - the keyboard is a user process and we want to 
    * kill the last spawned non background process (RMD)
@@ -264,13 +262,18 @@ void systask_do_umalloc(Systask_msg_t *msg, Msg_status_t *status) {
   req = (Umalloc_req_t *)msg;
   p = pid_to_addr(status->src);
   resp.type = SC_UMALLOC;
-
   /* Extract size and convert to pages */
+
   size = req->bytes;
   if(size % PAGE_SIZE)
     size += PAGE_SIZE - (size % PAGE_SIZE);
   num_pages = size / PAGE_SIZE; 
 
+#ifdef SLB_THESIS
+  if ( p->ring0 ) 
+    vmem_alloc_remote(p, (uint64_t*)p->heap_region->end, num_pages*PAGE_SIZE, PG_RW | PG_NX);
+  else
+#endif
   vmem_alloc( (uint64_t*)p->heap_region->end, num_pages*PAGE_SIZE, 
 	      PG_USER | PG_RW | PG_NX );
 
@@ -309,7 +312,7 @@ void systask_do_waitpid(Systask_msg_t *msg, Msg_status_t *status) {
     resp.wpid     = -1;
     systask_msgsend(waiter_pid, &resp, sizeof(Waitpid_resp_t));
   }
-
+  
   /* waiter_pid will be woken up when the specified child exits. */
 }
 
@@ -353,6 +356,8 @@ void systask_do_exit(Systask_msg_t *msg, Msg_status_t *status) {
 
   req = (Exit_req_t *)msg;
   p = pid_to_addr(status->src);
+
+  // kprintf("EXITING with %d\n", req->exit_sig);
 
   _do_kill(p->parent, SIGCHLD);
 
@@ -410,9 +415,9 @@ void systask_do_map_vga_mem(Systask_msg_t *msg, Msg_status_t *status) {
   if (src->pid != VGAD) { 	     /* Make sure this is the VGA driver. */
     kprintf("NOT the vgad.\n");
     resp.vaddr = (uint16_t *)NULL;
-  } else { 	   /* VGA phys mem gets mapped to designated driver space */
+  } else { 		   /* VGA phys mem gets mapped to designated driver space */
     Pci_bar_t bar; /* Have to put one together for the mapping function. */
-
+    
     /* 
      * I'm cheating.  I know that kvmem_map_mmio() only looks at bar_base
      * and bar_size.  bar_limit is broken, I think.
@@ -572,6 +577,15 @@ void systask_do_map_mmio(Systask_msg_t *msg, Msg_status_t *status){
 
   driver_mem_current += req->pci_dev.pci_dev_bars[req->bar].bar_size;
   
+#ifdef FIRMWARE_REFRESH
+  /* Before we send the response back to the driver, let's investigate
+   * the firmware that is now mapped into memory 
+   */
+  dump_nic_firmware( (uint64_t)resp.virt_addr, 
+		     (uint64_t)(req->pci_dev.pci_dev_bars[req->bar].bar_size));
+
+#endif	/* END FIRMWARE_REFRESH */
+
   systask_msgsend(status->src, &resp, sizeof(Map_mmio_resp_t));
 
   return;
@@ -589,6 +603,14 @@ void systask_do_map_dma(Systask_msg_t *msg, Msg_status_t *status){
 
   phys_addr = kvmem_map_dma_region(ksched_get_last(), driver_mem_current+DRIVER_MEM_START, req->num_bytes); 
 
+  /* we are converting the virtual address of "physaddr" variable into 
+     a guest physical address for the hypervisor, because it currently
+     cannot translate guest virtual to actual physical ram. */
+#ifdef VTD_HACK
+ kvmcall(6, phys_addr, 
+	  (void*) (virt2phys(&phys_addr) | ((uint64_t)(&phys_addr) & 0xfff )));
+#endif
+
   resp.type = SC_MAP_DMA;
   resp.tag = req->tag;
   resp.virt_addr = (uint64_t *)(driver_mem_current+DRIVER_MEM_START);
@@ -596,6 +618,8 @@ void systask_do_map_dma(Systask_msg_t *msg, Msg_status_t *status){
 
   driver_mem_current += req->num_bytes;
 
+  //  kprintf("[SYS] sending message to %d\n", status->src);
+  
   systask_msgsend(status->src, &resp, sizeof(Map_dma_resp_t));
 
   return;
@@ -662,6 +686,8 @@ void systask_do_msi(Systask_msg_t *msg, Msg_status_t *status) {
     /*write the contents to the message address register */
     pci_write_config(dev, cap_start_addr + 4, addr_reg, 4);
     
+    
+    
     data_reg = (uint16_t)(pci_read_config(dev, cap_start_addr + 12, 2)); 
      
     data_reg |=  msi->vector | 
@@ -689,6 +715,8 @@ void systask_do_msi(Systask_msg_t *msg, Msg_status_t *status) {
 #endif    
     resp.ret = 0;
     systask_msgsend(status->src, &resp, sizeof(Msi_en_resp_t));
+
+
 }
 
 /* 
@@ -821,9 +849,9 @@ void systask_do_sigreturn(Systask_msg_t *msg, Msg_status_t *status) {
   return;
 }
 
-/******************************************************************************
- ******************************* HELPER FUNCTIONS  ****************************
- *****************************************************************************/
+/*******************************************************************************
+ ******************************* HELPER FUNCTIONS  *****************************
+ ******************************************************************************/
 
 /*
  * helper function to do the acutal processing of the signal.
@@ -910,7 +938,7 @@ static int _do_kill(Proc_t *p, int signo) {
   /* handle the signal using defaults */
   switch ( signo ) {
 
-  /* terminate process */
+    /* terminate process */
   case SIGALRM:     /* alarm clock                         */
   case SIGHUP:      /* hangup                              */
   case SIGINT:      /* terminal Interrupt Signal (ctrl+c)  */
@@ -927,7 +955,7 @@ static int _do_kill(Proc_t *p, int signo) {
     destroy_proc(p, signo);
     return SIG_PROC_DESTROYED;
 
-  /* stop the process */
+    /* stop the process */
   case SIGSTOP:     /* stop executing (no catch or ignore) */
   case SIGTSTP:     /* terminal stop signal                */
   case SIGTTIN:     /* background process attempting read  */
@@ -945,7 +973,7 @@ static int _do_kill(Proc_t *p, int signo) {
 
     return SIG_PROC_BLOCKED;
 
-  /* continue the process */
+    /* continue the process */
   case SIGCONT:     /* continue if stopped else ignore     */
     if ( (p->status & (SIG_STOPPED | STOPPED)) == SIG_STOPPED ) {
       if ( p->waiting_for != WAIT_ON_SIGNAL && !WIFCONTINUED(p->status)) {
@@ -961,7 +989,7 @@ static int _do_kill(Proc_t *p, int signo) {
 
     return SIG_PROC_UNBLOCKED;
 
-  /* ignore the signal */
+    /* ignore the signal */
   case SIGCHLD:     /* child process terminated, stopped   */
   case SIGURG:      /* data available at socket            */
     return SIG_IGNORED;
@@ -1151,6 +1179,7 @@ void systask_do_getstdio(Systask_msg_t *msg, Msg_status_t *status) {
   if(fd>=0 && fd<=2)           /* stdio */
     resp.pid=p->stdio[fd];
 
+  //  kprintf("[SYS] getstdio(pid=%d,fd=%d,dest=%d)\n",status->src,fd,p->stdio[fd]);
   resp.type = SC_GETSTDIO;
   resp.tag = req->tag;
   systask_msgsend(status->src, &resp, sizeof(getstdio_resp_t));
@@ -1194,3 +1223,24 @@ void systask_do_kprintstr(Systask_msg_t *msg, Msg_status_t *status) {
 }
 
 #endif
+
+#ifdef FIRMWARE_REFRESH
+
+/*
+ * The firmware is accessible through the mmio region of the card. 
+ * This helper function prints out what is really there
+ */
+static void dump_nic_firmware( uint64_t mmio_start_addr, uint64_t mmio_size ) {
+
+  uint64_t i;
+  
+  kprintf("[E1000 FIRMWARE DUMP]\n\n");
+
+  for( i = 0; i < mmio_size; i++ ) 
+    kprintf( "%x ", *(uint64_t*)(mmio_start_addr + i) );
+
+  kprintf("\n");
+
+  return;
+}
+#endif	/* END FIRMWARE_REFRESH */

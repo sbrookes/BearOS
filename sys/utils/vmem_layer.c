@@ -1,31 +1,29 @@
 /*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
-/*
  * vmem_layer.c
  *
- * Functions for initializing and managing the system's virtual memory. 
+ * Functions for initializing the system's virtual memory. This layer sits atop
+ * the physical memory, and gives us the kernel's address space. The address
+ * space itself can be seen in <memory.h>, but of particular interest is the
+ * layout of physical memory. This goes as follows:
  *
+ * ------- TOP --------
+ * |  reserved space  |
+ * | -- 2 MB bound -- |
+ * | - 1 MB scratch - |
+ * |       small      |
+ * |      chunks      |
+ * | ---------------- | \
+ * |   physical mem   |  \
+ * |       map        |   \
+ * | ---------------- |    \
+ * |    kernel heap   |     \ ---- largest available
+ * | ---------------- |     / ---- chunk of memory
+ * |    allocable     |    /
+ * |      pages       |   /
+ * | ---------------- |  /
+ * |    more small    | /
+ * |     chunks       |/
+ * ------ BOTTOM ------
  */
 
 #include <asm_subroutines.h>
@@ -38,8 +36,13 @@
 #include <kqueue.h>
 #include <vk.h>
 
+#if defined(SLB_THESIS) && defined(KERNEL)
+#include <asmp.h>
+#endif
+
 /* 
- * we need to have these static variables because boot2 does not have a .bss
+ * The hammer would like to point out that we need to 
+ * have these static variables because boot2 does not have a .bss
  * Ergo, we need to have setters and getters for the heap 
  */
 
@@ -86,6 +89,9 @@ inline void cache_flush(volatile void *addr)
 {
     asm volatile ("clflush (%0)" :: "r"(addr));
 }
+
+
+
 
 /*
  * -------------TRACKING VIRTUAL MEMORY -------------
@@ -168,6 +174,16 @@ void vmem_print_pages(int alloc) {
 
   kprintf("Page Maps: Taken %d, Free %d Total %d\n", sum_taken, sum_free, (sum_free+sum_taken));
 }
+
+/*
+static const char *types[] = { "",
+                               "Usable",
+                               "Unusable (reserved)",
+                               "ACPI reclaimable",
+                               "ACPI NVS",
+                               "Bad" 
+};
+*/
 
 void setup_table( void *phys, void *vaddr, uint64_t flags) {
 
@@ -666,6 +682,268 @@ void vmem_alloc( uint64_t* base, uint64_t length, uint64_t flags ) {
   return;
 }
 
+#ifdef SLB_THESIS
+#ifdef KERNEL
+
+/* 
+   The functions below are based on the concept of a "vmem bridge" 
+
+          REMOTE TABLES 
+
+          +-PML4T-+    +-PDPT -+    +- PD  -+    +- PT  -+    +-PAGE -+ 
+          |       |    |       |    |       |    |       |    |       |
+          |       |    |       |    |       |    |       |    |       |
+          |       |    |       |    |       |    |       |    |       |
+          |       |    |       |    |       |    |       |    |       |
+          |       |    |       |    |       |    |       |    |       |
+     +--->|_______|    |_______|    |_______|    |_______|    |_______|   
+     |
+     |    HOST TABLES 
+     +--------------+
+          +-PML4T-+ |  +-PDPT -+    +- PD  -+    +- PT  -+    +-PAGE -+ 
+       +--|rec_ptr| |  |       |    |       |    |       |    |       |
+       |  |bridge |-+  |       |    |       |    |       |    |       |
+       |  |       |    |       |    |       |    |       |    |       |
+       |  |       |    |       |    |       |    |       |    |       |
+       |  |       |    |       |    |       |    |       |    |       |
+       +->|_______|    |_______|    |_______|    |_______|    |_______|   
+   
+
+ */
+
+/* remote PML4T is like a host PDPT at 'bridge' idx */
+uint64_t *remote_PML4TE2vaddr(Proc_t *proc, int pml4te) {
+  check_vmem_bridge(proc); 
+  return PDPTE2vaddr(proc->vmem_bridge_idx, pml4te);
+}
+
+uint64_t *remote_PDPTE2vaddr(Proc_t *proc, int pml4te, int pdpte) {
+  check_vmem_bridge(proc);
+  return PDE2vaddr(proc->vmem_bridge_idx, pml4te, pdpte);
+}
+
+uint64_t *remote_PDE2vaddr(Proc_t *proc, int pml4te, int pdpte, int pde) {
+  check_vmem_bridge(proc);
+  return PTE2vaddr(proc->vmem_bridge_idx, pml4te, pdpte, pde);
+}
+
+/* for remote PTE, I can't use the recursive ptr, gotta use bridge_idx as the 
+   first addr */
+uint64_t *remote_PTE2vaddr(Proc_t *proc, int pml4te, int pdpte, int pde, int pte) {
+  check_vmem_bridge(proc);
+  return ((uint64_t*)((((uint64_t)proc->vmem_bridge_idx) << 39)         \
+		      | (((uint64_t)((pml4te) & 0x1ff)) << 30)		\
+		      | (((uint64_t)((pdpte) & 0x1ff)) << 21)		\
+		      | (((uint64_t)((pde) & 0x1ff)) << 12)		\
+		      | (((uint64_t)((pte) & 0xfff))*8)));
+}
+
+uint64_t *remote_idx2vaddr(Proc_t *proc, int pml4te, int pdpte, int pde, int pte) {
+  check_vmem_bridge(proc);
+  return (uint64_t*)phys2virt(TABLE2ADDR(((union pt_entry*)remote_PTE2vaddr(proc, pml4te, pdpte, pde, pte))->addr));
+}
+
+/** given a virtual address, make sure that there are paging structures mapped 
+    to support writing to that address. */
+void vaddr_init_remote(Proc_t *proc, uint64_t *vaddr, uint64_t flags) {
+
+  struct page_map_level_4_table *pml4t;
+  struct page_directory_pointer_table *pdpt = 0x0;
+  struct page_directory *pd = 0x0;
+  struct page_table *pt = 0x0;
+
+  uint64_t frame_paddr;
+  
+  /** figure out where in the tables we will store the array based on the 
+      fixed virtual address given **/
+  int pml4t_idx = virt2pml4t(vaddr);
+  int pdpt_idx = virt2pdpt(vaddr);
+  int pd_idx = virt2pd(vaddr);
+
+  /* make sure the process has a vmem_bridge set up. */
+  if ( proc->vmem_bridge_idx < 0 )
+    vmem_bridge(proc);
+
+  /** NOTE: For setup tables in this function, we are marking them as 
+      executable because this table might be used for some executable stuff 
+      later on (we dont know) and we dont trust later allocators to check this 
+      top level permissions. marking the pte only as no-execute is sufficient
+      to ensure that given memory is not executable **/
+  pml4t = (struct page_map_level_4_table *)remote_PML4TE2vaddr(proc, 0);
+  if(!(pml4t->entries[pml4t_idx]).present){
+    
+    /* put it in the remote tables */
+    setup_table( (void*)get_free_frame(), &pml4t->entries[pml4t_idx], PG_RW | PG_USER);
+    
+    /**then memset the frame for the pdpt ITSELF to zero */
+    kmemset(remote_PDPTE2vaddr(proc, pml4t_idx, 0), 0, PAGE_SIZE);
+  }
+
+  /* probe the pdpt to verify that we have a pd */
+  if ( !pdpt ) 
+    pdpt = (struct page_directory_pointer_table *)remote_PDPTE2vaddr(proc, pml4t_idx, 0);
+  if(!(pdpt->entries[pdpt_idx]).present){
+    /* put it into the remote tables */
+    setup_table( (void*)get_free_frame(), &pdpt->entries[pdpt_idx], PG_RW | PG_USER); 
+
+    kmemset(remote_PDE2vaddr(proc, pml4t_idx, pdpt_idx, 0), 0, PAGE_SIZE);
+  }
+
+  /* probe the pd to verify that we have a pt */
+  if ( !pd )
+    pd = (struct page_directory *)remote_PDE2vaddr(proc, pml4t_idx, pdpt_idx, 0);
+  if(!(pd->entries[pd_idx]).present){
+    /* put it into the remote tables */
+    setup_table((void *)get_free_frame(), &pd->entries[pd_idx], PG_RW | PG_USER);
+
+    kmemset(remote_PTE2vaddr(proc, pml4t_idx, pdpt_idx, pd_idx, 0), 0, PAGE_SIZE);
+  }
+
+  return;
+}
+
+/* todo problem:
+   I want to vmem alloc in another cr3 target @ the vaddr (base) that that 
+   cr3 target will use to access the data. But, I also need to know the 
+   virtual memory that I'LL use to access that memory...
+
+   possible solution -> get a single vkmalloc'd amount of LENGTH, then pull 
+   from (and return) that addr. So, I might not know my (or their) vaddrs for 
+   the paging structures, but I _do_ at least know (and have) the (continuous) 
+   region that I was asking to populate in the first place.
+
+   TOPUTINTHESIS: ^^ Challenges of manipulating vaddrs in other contexts. 
+     in general, I have another set of addresses now, sort of.
+ */
+/* TODO TODO 
+   do I need 2 sets of flags since I'm putting this shit into 2 tables? 
+   
+   related: is it ok to mark the user's memory as PG_RW? Probably want NX... 
+   is this safe?
+*/
+uint64_t vmem_alloc_remote(Proc_t *proc, uint64_t* base, uint64_t length, uint64_t flags ) {
+
+  struct page_map_level_4_table *pml4t;
+  struct page_directory_pointer_table *pdpt;
+  struct page_directory *pd;
+  struct page_table *pt;
+  uint64_t *page;
+	
+  uint64_t frame_paddr;
+
+  uint64_t host_vaddr, host_vaddr_ret;
+
+  uint64_t pages;
+
+  int pml4t_idx;
+  int pdpt_idx;
+  int pd_idx;
+  int pt_idx;
+
+  /* make sure that the passed process has a vmem_bridge set up. */
+  if ( proc->vmem_bridge_idx < 0 )
+    vmem_bridge(proc);  
+
+  vaddr_init_remote(proc, base, flags);
+
+  /* preallocate the portion of virtual memory that we want to alloc */
+  pages = length/PAGE_SIZE + (length%PAGE_SIZE ? 1 : 0);
+  host_vaddr = vkmalloc(vk_heap, pages);
+  vmem_alloc((uint64_t*)host_vaddr, pages*PAGE_SIZE, PG_RW | PG_NX);
+  kmemset((void*)host_vaddr, 0, pages*PAGE_SIZE);
+  host_vaddr_ret = host_vaddr;
+
+  /* TODO TODO: I return this virtual address for the kernel to use... but if 
+     I don't save it, the only way to recover it later is via the vmem bridge. 
+     is that ok? */
+
+  /** figure out where in the tables we will store the array based on the 
+      fixed virtual address given **/
+  pml4t_idx = virt2pml4t(base);
+  pdpt_idx = virt2pdpt(base);
+  pd_idx = virt2pd(base);
+  pt_idx = virt2pt(base);
+
+  while ( (uint64_t)idx2vaddr(pml4t_idx,pdpt_idx,pd_idx,pt_idx) < ((uint64_t)base+length) ) {
+
+    if(pt_idx == 512) {
+      pt_idx = 0;
+      pd_idx++;
+
+      if(pd_idx == 512) {
+        pd_idx = 0;
+        pdpt_idx++;
+
+        if(pdpt_idx == 512) {
+          pdpt_idx = 0;
+          pml4t_idx++;
+
+          if(pml4t_idx == 511) {
+            kputs("Not enough virtual memory to page the region");
+	    kprintf("args to vmem alloc remote were: \n");
+	    kprintf("     pcr3: 0x%x\n", proc->cr3_target);
+	    kprintf("     base: 0x%x\n", base);
+	    kprintf("     length: 0x%x\n", length);
+	    kprintf("     flags: 0x%x\n", flags);
+            panic();
+          }
+
+	  /* if we rolled over the indeces above, the condition tested in the 
+	     while loop wasn't an accurate test of what we're trying to do */
+	  if ( !((uint64_t)idx2vaddr(pml4t_idx,pdpt_idx,pd_idx,pt_idx) < ((uint64_t)base+length)) )
+	    break;
+
+	  pml4t = (struct page_map_level_4_table *)remote_PML4TE2vaddr(proc, 0);
+	  if(!(pml4t->entries[pml4t_idx]).present){
+	    
+	    /* put it in the remote tables */
+	    setup_table( (void*)get_free_frame(), &pml4t->entries[pml4t_idx], PG_RW | PG_USER);
+	    
+	    /**then memset the frame for the pdpt ITSELF to zero */
+	    kmemset(remote_PDPTE2vaddr(proc, pml4t_idx, 0), 0, PAGE_SIZE);
+	  }
+        }//pdpt's
+	
+	pdpt = (struct page_directory_pointer_table *)remote_PDPTE2vaddr(proc, pml4t_idx, 0);
+	if(!(pdpt->entries[pdpt_idx]).present){
+	  
+	  /* put it into the remote tables */
+	  setup_table( (void*)get_free_frame(), &pdpt->entries[pdpt_idx], PG_RW | PG_USER); 
+	  
+	  kmemset(remote_PDE2vaddr(proc, pml4t_idx, pdpt_idx, 0), 0, PAGE_SIZE);
+	}
+      }//pd's
+      
+      pd = (struct page_directory *)remote_PDE2vaddr(proc, pml4t_idx, pdpt_idx, 0);
+      if(!(pd->entries[pd_idx]).present){
+
+	/* put it into the remote tables */
+	setup_table((void *)get_free_frame(), &pd->entries[pd_idx], PG_RW | PG_USER);
+	
+	kmemset(remote_PTE2vaddr(proc, pml4t_idx, pdpt_idx, pd_idx, 0), 0, PAGE_SIZE);
+      }
+    }//pt's 
+    
+    /** finally attach the frames to actual pt's */
+    pt = (struct page_table *)remote_PTE2vaddr(proc, pml4t_idx, pdpt_idx, pd_idx, 0);
+    if( !(pt->entries[pt_idx].present) ) {
+      
+      page = (uint64_t*)host_vaddr;
+
+      /* put it into the remote tables */
+      setup_table((void*)virt2phys(page), &pt->entries[pt_idx], flags);
+
+      /* move addr we're working with */
+      host_vaddr += PAGE_SIZE;
+    }
+
+    pt_idx++;
+  }  //for loop on framearray_pages
+
+  return host_vaddr_ret;
+}
+#endif
+#endif
 
 #define VADDR2PTE(vaddr) \
   ((union page*)PTE2vaddr(virt2pml4t(vaddr), virt2pdpt(vaddr), \
@@ -879,6 +1157,47 @@ void vmem_free_imp(uint64_t* base, uint64_t length, int free) {
   return;
 }
 
+/* virtual memory layout: 
+   _______________________
+   |                       |
+   |                       |
+   |_________...___________|
+   |       ^ ^ ^ ^         |
+   |       user heap       |
+   |_______________________|
+   |    user text/data     |
+   |_______________________|
+   |     user  Stack       |
+   |       V V V V         |
+   |_________ ... _________|
+   |                       |
+   |                       |
+   |                       |
+   |                       |
+   |                       |
+   |                       |
+   |                       |
+   |_________...___________|
+   |       ^ ^ ^ ^         |
+   |     kernel heap       |    __
+   |_______________________| __|   kernel_end global variable in memory.h,
+   |  Kernel text/data     |   |__ set by bootloader
+   |_______________________|__ constant KERNEL_BEGIN defined in memory.h
+   |     kernel Stack      |
+   |       V V V V         |
+   |_________ ... _________|
+   |                       |
+   |                       |
+   |                       |
+   |                       |
+   |_______________________|
+   |        ......         |
+   |_______________________| __ 1 MB
+   |                       |
+   |  bootloader stuff...  |
+   |_______________________|
+
+*/
 void vmem_init(void) {
 
 #ifdef DIVERSITY

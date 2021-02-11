@@ -1,26 +1,3 @@
-/*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
 #include <constants.h>
 #include <kstdio.h>
 #include <interrupts.h>
@@ -50,6 +27,11 @@ extern void vec29();
 extern void vec80();
 extern void vec81();
 extern void vec7F();
+
+#ifdef SLB_THESIS
+extern void vec90();
+extern int ipi_handler_len;
+#endif
 
 extern void reload_segs();
 
@@ -196,11 +178,27 @@ void intr_init() {
       i++, func_addr += block_delta) {
 
     if(i == 0x81)
-      intr_update_idtentry(i, INTR64_ON, func_addr);
+#ifdef FORENSICS	
+      intr_update_idtentry(i, INTR64_OFF, func_addr);
+#endif
+#ifndef FORENSICS
+    intr_update_idtentry(i, INTR64_ON, func_addr);
+#endif
     else
       intr_update_idtentry(i, INTR64_ON, func_addr);
   }
 
+#ifdef SLB_THESIS
+  /* set up remainder as IPIs asm handlers */
+  block_base = (uint64_t)(&vec90);
+  block_delta = ipi_handler_len;
+	
+  for ( i = 0x90, func_addr = block_base;
+	i < IDT_NUM_ENTRIES;
+	i++, func_addr += block_delta) {
+    intr_update_idtentry(i, INTR64_ON, func_addr);
+  }
+#endif
 
   /* Tell the processor where the IDT is in memory. */
   lidt();
@@ -441,15 +439,7 @@ static void init_tss() {
   uint64_t stk;
 
   /* Allocate stuff */
-#ifndef HYPV
   stk = (uint64_t)system_stack_base; /* the TSS stack IS the kernel stack */
-#else
-  stk = (uint64_t)new_stack(NULL);
-#ifdef DEBUG
-  kprintf("[HYPV INT] system stack 0x%x new stack 0x%x\n",
-	  (uint64_t)system_stack_base, stk);
-#endif
-#endif
   tss_base = (tss_t*)kmalloc_track(INTERRUPTS_SITE,TSS_SIZE);
   tss = tss_base;
 
@@ -529,10 +519,17 @@ void interrupt_release_lock(void){
 
 /* Print the exception vector and CR2 if this was a pagefault. */
 void print_exception_info_one(uint64_t vec) {
-  kprintf("\nEXCEPTION ENCOUNTERED\n");
-  kprintf("Vector: 0x%x\n",vec);
 
 #ifdef EXCEPTION_DEBUG
+#ifdef KERNEL
+#ifdef ENABLE_SMP
+  //release_lock(sem_kernel);
+  //asm volatile ("hlt");
+  //	acquire_lock(sem_kernel);
+#endif
+#endif
+  kprintf("\nEXCEPTION ENCOUNTERED\n");
+  kprintf("Vector: 0x%x\n",vec);
   if (vec == 0xE) {		/* page fault */
     kprintf("CR2          : 0x%x\n",read_cr2());
 #ifdef KERNEL
@@ -589,7 +586,25 @@ void print_exception_info_two(uint64_t ss, uint64_t *rsp, uint64_t rflags,
 #ifdef ENABLE_SMP
   kprintf("core that died = %d\n",this_cpu());
 #endif
+  //release_lock(sem_kernel);
 #endif
+  //asm volatile("hlt");
+#ifdef KERNEL
+#if 0 
+  kvmcall(1, (uint64_t)rip, NULL);
+  kvmcall(0,0,NULL);		/* do a stack trace */
+#endif  
+#endif /*kvmcall to print insturction faulting */
+  /*disk access broken in hypervisor */
+#if 0
+#ifdef HYPV
+  char *name;
+  name = search_symbol_name(rip, "/BINARYTE");
+  if(name != NULL)
+    kprintf("[%s] \n", name);
+#endif	
+#endif 
+  
 #endif
 
 #ifdef KERNEL
@@ -597,12 +612,12 @@ void print_exception_info_two(uint64_t ss, uint64_t *rsp, uint64_t rflags,
 #ifdef EXCEPTION_DEBUG
   if (cp) kprintf("last Proc PID: %d, %s\n",cp->pid, cp->procnm);
 #endif
-
   /* nifty little trick to prevent endless loops 
    * if the same process keeps faulting, why 7? cause I can
    */
+  //#ifndef EXCEPTION_DEBUG
   asm volatile("hlt");		/* not using trick right now */
-
+  //#endif
   if(dead_count > 5){
     kprintf("Warning Unrecoverable Fault System halting\n");
     asm volatile("hlt");

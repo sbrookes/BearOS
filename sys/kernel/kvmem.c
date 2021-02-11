@@ -1,27 +1,4 @@
-/*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
-/******************************************************************************
+/*******************************************************************************
  * Filename: kvmem.c
  *
  * Description: Contains all the functions for managing virtual memory. This
@@ -29,7 +6,7 @@
  *              structures, and managing the memory-mapped I/O (MMIO) segment
  *              of the virtual address space.
  *
- *****************************************************************************/
+ ******************************************************************************/
 
 #include <constants.h>
 #include <kstring.h>        /* For kmemset kmemcpy */
@@ -56,28 +33,29 @@ typedef struct {
   unsigned int num_pages;
 } Mem_alloc_t;
 
-static void *alloc_table; /* Hash table of driver memory allocations by pid */
+static void *alloc_table; /* Hash table of driver memory allocations, by pid. */
 #define ALLOC_TABLE_SLOTS 9
 
-/******************************************************************************
- **************************** PRIVATE FUNCTIONS *******************************
- *****************************************************************************/
+/*******************************************************************************
+ ***************************** PRIVATE FUNCTIONS *******************************
+ ******************************************************************************/
 
 static void kvmem_add_dev_alloc(pid_t pid, int type, uint64_t vaddr, 
 				uint64_t paddr, int num_pages);
 static int  kvmem_matches_pid  (void *elementp, const void *searchkeyp);
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: kvmem_init
  *
  * Description: Initializes virtual memory for the kernel
  *
- *****************************************************************************/
+ ******************************************************************************/
 void kvmem_init( uint64_t frame_array_address, uint64_t heap_start ) {
   uint64_t vaddr, paddr, end_addr;
 
   /* Initialize virtual memory layer */
+  // vmem_init((struct memmap *)MEMORY_MAP, *((uint16_t *)MEMORY_MAP_ENTRIES));
   seed_vmem_layer( frame_array_address, heap_start );
 
   /*
@@ -113,7 +91,7 @@ void kvmem_init( uint64_t frame_array_address, uint64_t heap_start ) {
  ********************* MANIPULATION OF PAGING STRUCTURES **********************
  *****************************************************************************/
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: attach_page
  *
@@ -129,15 +107,25 @@ void kvmem_init( uint64_t frame_array_address, uint64_t heap_start ) {
  *   ptflags: The flags put into the PML4T, PDPT, and PD entries.
  *   pgflags: The flags put into the page table entry.
  *
- *  See procman.h for a list of page table flags (FIXME: This should probably 
- * go into memory.h)
+ *  See procman.h for a list of page table flags (FIXME: This should probably go
+ * into memory.h)
  *
- *****************************************************************************/
+ ******************************************************************************/
 /* TODO: this dulicate copy of the attach_page function is designed simply to 
    not adjust the frame array... it exists to help old kernel contexts catch 
    up with what the new kernel core kernel context does. When there is jsut 1 
    kernel context, this can go away. */
+#ifdef SLB_THESIS
 int attach_page(uint64_t vaddr, uint64_t paddr, uint64_t flags) {
+  return attach_page_imp(vaddr, paddr, flags, 0);
+}
+  
+int attach_page_dup(uint64_t vaddr, uint64_t paddr, uint64_t flags) {
+  return attach_page_imp(vaddr, paddr, flags, 1);
+}
+
+int attach_page_imp(uint64_t vaddr, uint64_t paddr, uint64_t flags, int dup) {
+#endif
   int pml4t_idx, pdpt_idx, pd_idx, pt_idx;
 
   /* Check that addresses are page-aligned */
@@ -160,10 +148,51 @@ int attach_page(uint64_t vaddr, uint64_t paddr, uint64_t flags) {
   pt_idx = virt2pt(vaddr);
 
   setup_table((void*)paddr, PTE2vaddr(pml4t_idx, pdpt_idx, pd_idx, pt_idx), flags);
+#ifdef SLB_THESIS
+  if (!dup)
+#endif
   framearray[paddr/PAGE_SIZE].vaddr = idx2vaddr(pml4t_idx, pdpt_idx, pd_idx, pt_idx);
 
   return 0;
 }
+
+#ifdef SLB_THESIS
+#ifdef KERNEL
+uint64_t attach_page_remote(Proc_t *proc, uint64_t rvaddr, uint64_t paddr, uint64_t flags) {
+
+  uint64_t vaddr;
+  int pml4t_idx, pdpt_idx, pd_idx, pt_idx;
+
+  /* Check that addresses are page-aligned */
+  if (rvaddr & 0xFFF){
+    kprintf("attempt to attach unaligned virt address 0x%x\n", vaddr);
+    return MEM_FAIL;
+  }
+
+  /* Check that addresses are page-aligned */
+  if (paddr & 0xFFF){
+    kprintf("attempt to attach unaligned phys address 0x%x\n", paddr);
+    return MEM_FAIL;
+  }
+
+  vaddr_init_remote(proc, (uint64_t*)rvaddr, flags);
+
+  pml4t_idx = virt2pml4t(rvaddr);
+  pdpt_idx = virt2pdpt(rvaddr);
+  pd_idx = virt2pd(rvaddr);
+  pt_idx = virt2pt(rvaddr);
+
+  /* put page into remote tables */
+  setup_table((void*)paddr, remote_PTE2vaddr(proc, pml4t_idx, pdpt_idx, pd_idx, pt_idx), flags);
+
+  /* put page into kernel tables */
+  vaddr = vkmalloc(vk_heap, 1);
+  attach_page(vaddr, paddr, flags);
+
+  return vaddr;
+}
+#endif
+#endif
 
 /*
  * Does not attempt to free the page that gets unmapped; this function does not
@@ -201,13 +230,13 @@ void detach_page(Proc_t *p, uint64_t vaddr) {
   kmemset(page, 0, sizeof(union page));
 }
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: flush_tlb(int)
  *
  * Description: Flushes the given part of the address space from the TLB.
  *
- *****************************************************************************/
+ ******************************************************************************/
 void flush_tlb(int where) {
   switch(where) {
     uint64_t cr3;
@@ -224,11 +253,11 @@ void flush_tlb(int where) {
   }
 }
 
-/******************************************************************************
- ******************* PERIPHERAL DEVICE MEMORY MANAGEMENT **********************
- *****************************************************************************/
+/*******************************************************************************
+ ******************** PERIPHERAL DEVICE MEMORY MANAGEMENT **********************
+ ******************************************************************************/
 
-/******************************************************************************
+/*******************************************************************************
  *
  * Function: map_io_mem
  *
@@ -236,7 +265,7 @@ void flush_tlb(int where) {
  *              into the kernel and return the virtual address of the new 
  *              memory region.
  *
- *****************************************************************************/
+ ******************************************************************************/
 uint64_t kvmem_map_mmio(Proc_t *p, uint64_t virt_addr, Pci_bar_t *bar) {
   uint64_t phys_addr;
   uint64_t max_paddr;
@@ -269,8 +298,14 @@ uint64_t kvmem_map_dma_region(Proc_t *p, uint64_t virt_addr, uint64_t bytes) {
   uint64_t phys_addr;
   int i;
 
+  //if(bytes % PAGE_SIZE)
+  //	bytes += PAGE_SIZE - (bytes % PAGE_SIZE);
+
   /* Map in the memory */
   phys_addr = get_contiguous_frames(bytes);
+	
+  /* Make a record of this allocation so we can free it later */
+  //kvmem_add_dev_alloc(p->pid, KVMEM_TYPE_DMA, virt_addr, phys_addr, pages);
 
   for ( i = 0; i < bytes/PAGE_SIZE; i++, virt_addr += PAGE_SIZE ) 
     attach_page(virt_addr, phys_addr + i*PAGE_SIZE, UMEM_IO_FLAGS_UC);
@@ -299,12 +334,17 @@ void kvmem_unmap_devmem(Proc_t *p) {
       detach_page(p, vaddr);
     }
 
+    /* Free pages, any were allocated. */
+    if (dev_alloc->type == KVMEM_TYPE_DMA) {
+      //vmem_free_region_track(KVMEM_VMEM_SITE,phys2virt(dev_alloc->paddr));
+    }
+
     /* Free the allocation record. */
     kfree_track(KVMEM_SITE,dev_alloc);
   }
 }
 
-/************************* PRIVATE FUNCTIONS *********************************/
+/************************** PRIVATE FUNCTIONS *********************************/
 
 static void kvmem_add_dev_alloc(pid_t pid, int type, uint64_t vaddr, 
 				uint64_t paddr, int num_pages) {

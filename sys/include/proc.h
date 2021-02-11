@@ -1,26 +1,3 @@
-/*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
 #pragma once
 /*
  * proc.h
@@ -67,7 +44,6 @@ struct memory_region {
 };
 
 typedef struct _proc {
-
   /* Machine Context */
   struct mcontext mc;         /* THIS MUST COME FIRST! (machine regs)       */
   struct mcontext kmc;        /* MUST BE SECOND! kernel machine context
@@ -78,6 +54,65 @@ typedef struct _proc {
   /* Privilege Info */
   pid_t pid;                  /* Process ID                                 */
   uint8_t pl;                 /* Privilege Level                            */
+#ifdef SLB_THESIS
+  uint8_t ring0;
+  int vmem_bridge_idx;
+  struct mcontext *usr_mc_addr;
+  uint64_t usr_next_proc_cr3;
+
+  uint64_t usr_schedule_fn;
+  uint64_t usr_checkin_fn;
+
+  /* the kernel will populate some global variables for the user proc. 
+     usr_var_addr: the address of the variable in the user's address space
+     usr_var_val:  the value stored at that location
+  */
+  uint64_t *usr_lapicaddr_addr;
+  uint64_t *usr_kcorenum_addr;
+  int *usr_ring0_flag;
+
+  /* TODO temporary? flag to help kernel know whether this proc is blocked 
+     waiting for a message from another proc. */
+  int blocked;
+
+  /* for ring buffer of syscalls */
+  Message_t **usr_sc_rbuf;
+  uint64_t sc_rbuf_size;
+  uint64_t *usr_sc_rbuf_head;
+  uint64_t *usr_sc_rbuf_tail;
+
+  Message_t *k_sc_rbuf;
+  uint64_t *k_sc_rbuf_head;
+  uint64_t *k_sc_rbuf_tail;
+  
+  /* address of global var that holds gdt descriptor. */
+  uint64_t usr_gdtp;
+  uint64_t usr_idtp;
+  uint64_t gdt_base;
+  uint16_t gdt_limit;
+
+  /* interrupt handling code stuff */
+  uint64_t usr_intr_stk;
+  uint64_t usr_idt_addr;
+  uint64_t usr_intr_vec0;   /* addr in userspace of the first int handler */
+  uint64_t usr_handler_len; /* the length of an interrupt handling routine */
+  void (**usr_intr_handler_array)(uint64_t)
+; /* userspace addr of the handler array */
+  uint64_t usr_intr_generic_handler; 
+  uint64_t usr_intr_lapic_addr; /*hack ): -> I need sendIPI in this code as 
+				  well, so I need an lapicaddr in this code 
+				  too */
+
+  /* TODO: These are physical addresses used for a different kernel context 
+           to generate its own mappings for the memory needed to attach a 
+           message to a process. When there is just 1 kernel core and 1 kernel 
+           context, these wont be necessary. */
+  uint64_t mpbuf_phys;
+  Msg_status_t *mpstatus_phys;
+  uint64_t scrbuf_phys;
+  uint64_t scrbuf_tail_phys;
+
+#endif
 
   /* Paging and Memory */
   /* TODO: erase these 2 */
@@ -92,6 +127,7 @@ typedef struct _proc {
   int argc;
   char **argv;
   int envc;
+  //char **envp;
   uint64_t env;
 
   /* Message-Passing */

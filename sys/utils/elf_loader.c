@@ -1,27 +1,4 @@
 /*
- Copyright <2017> <Scaleable and Concurrent Systems Lab; 
-                   Thayer School of Engineering at Dartmouth College>
-
- Permission is hereby granted, free of charge, to any person obtaining a copy 
- of this software and associated documentation files (the "Software"), to deal
- in the Software without restriction, including without limitation the rights 
- to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
- copies of the Software, and to permit persons to whom the Software is 
- furnished to do so, subject to the following conditions:
- 
- The above copyright notice and this permission notice shall be included in
- all copies or substantial portions of the Software.
- 
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
- IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
- FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
- AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
- LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-*/
-
-/*
  * elf_loader.c -- ELF loader for the hypervisor & kernel.
  *
  * Bear Requirements for ELF files:
@@ -204,7 +181,9 @@ static int load_file_header(struct elf_ctx *ctx) {
   ctx->readfunc(ctx->file_ctx, &ctx->file_header, sizeof(struct Elf_Ehdr));
   if(ctx->errorfunc(ctx->file_ctx)) return (1 << 1);
 
+#ifndef BSD
   if(checkhdr(&ctx->file_header)) return (1 << 2);
+#endif
 
   ctx->file_header_loaded = 1;
   return 0;
@@ -631,6 +610,13 @@ static void process_diversity_units(struct elf_ctx *ctx) {
       continue;
     }
 
+    /* We don't care if the relocation's symbol AND its offset both point
+     * into the same unit; it's unneeded at that point, as the default value
+     * will work just fine. */
+#if 0
+    if(UNIT_CONTAINS(unit, rel->r_offset)) continue;
+#endif
+
     listitem = kmalloc_track(ELF_LOADER_SITE,sizeof(struct external_reloc));
     kmemset(listitem, 0, sizeof(struct external_reloc));
     listitem->rel = rel;
@@ -665,6 +651,14 @@ static void process_diversity_units(struct elf_ctx *ctx) {
 #endif
       continue;
     }
+    //    kprintf("symbol %s; shdr %s.\n", ELF_SECNAME(, ctx->strtab), ELF_SECNAME(*shdr, ctx->section_strtab));
+
+    /* We don't care if the relocation's symbol AND its offset both point
+     * into the same unit; it's unneeded at that point, as the default value
+     * will work just fine. */
+#if 0
+    if(UNIT_CONTAINS(unit, rela->r_offset)) continue;
+#endif
 
     listitem = kmalloc_track(ELF_LOADER_SITE,sizeof(struct external_reloc));
     kmemset(listitem, 0, sizeof(struct external_reloc));
@@ -713,6 +707,9 @@ static int load_segment(
 			void *proc, 
 #endif
 			struct elf_ctx *ctx, struct Elf_Phdr *hdr) {
+#ifdef SLB_THESIS
+  uint64_t vaddr;
+#endif
   int size, i;
   int read, write, exec =0;
   struct Elf_Shdr *shdr;
@@ -745,6 +742,12 @@ static int load_segment(
 #ifdef BOOTLOADER
   vmem_alloc((uint64_t*)hdr->p_vaddr, size, PG_RW | PG_GLOBAL);
 #else
+#if defined(SLB_THESIS) && defined(KERNEL)
+  if ( ((Proc_t*)proc)->ring0 ) {
+    vaddr = vmem_alloc_remote((Proc_t*)proc, (uint64_t*)hdr->p_vaddr, size, PG_RW);
+  }
+  else
+#endif
   vmem_alloc((uint64_t*)hdr->p_vaddr, size, PG_RW | PG_USER);
 #endif
 
@@ -752,16 +755,38 @@ static int load_segment(
   add_memory_region(proc, TEXT_REGION, USR_TEXT_PERMS, hdr->p_vaddr, hdr->p_vaddr + size);
 #endif
 
+  /* read/copy the stuff from the ramdisk to the newly allocated memory */
+#if defined(SLB_THESIS) && defined(KERNEL)
+  if ( ((Proc_t*)proc)->ring0 ) 
+    ctx->readfunc(ctx->file_ctx, (void*)vaddr, size);
+  else
+#endif
   ctx->readfunc(ctx->file_ctx, (void*)hdr->p_vaddr, size);
   if(ctx->errorfunc(ctx->file_ctx)) {
     return ctx->errorfunc(ctx->file_ctx);
   }	
+  /* Zero any excess memory, as per the standard. */
+#if defined(SLB_THESIS) && defined(KERNEL)
+  if ( ((Proc_t*)proc)->ring0 ) 
+    kmemset((void*)(vaddr + hdr->p_filesz), 0, size - hdr->p_filesz);
+  else
+#endif
   kmemset((void*)(hdr->p_vaddr + hdr->p_filesz), 0, size - hdr->p_filesz);
 
   /* map in the BSS */
   for(i = 0, shdr = ctx->section_headers; i < ctx->file_header.e_shnum; i++, shdr++) {
     if(kstreq(ELF_SECNAME(*shdr, ctx->section_strtab), ".bss")) {
 #ifdef KERNEL
+#ifdef SLB_THESIS
+      if ( ((Proc_t*)proc)->ring0 ) {
+	vaddr = vmem_alloc_remote((Proc_t*)proc, (uint64_t*)shdr->sh_addr, 
+				  shdr->sh_size, PG_RW | PG_NX);
+	add_memory_region(proc, BSS_REGION, PG_RW | PG_NX, 
+			  shdr->sh_addr, shdr->sh_addr + shdr->sh_size);
+	kmemset( (void*)vaddr, 0, shdr->sh_size );
+	break; /* jumps out of loop to the return... */
+      }
+#endif
       vmem_alloc( (uint64_t*)shdr->sh_addr, shdr->sh_size, 
 		  PG_RW | PG_USER | PG_NX);
       add_memory_region(proc, BSS_REGION, PG_USER | PG_RW | PG_NX, 
@@ -826,11 +851,12 @@ uint64_t elf_load_file(
    * regions! */
   for(i = 0; i < ctx->file_header.e_phnum; i++) {
     phdr = ctx->program_headers + i;
-
+#ifndef BSD
     rc = valid_pheader(phdr);
     if(!rc) {
       continue;
     }
+#endif
 
 #ifdef HYPV
     rc = check_memory(brs, num_brs,
