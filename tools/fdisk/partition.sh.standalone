@@ -28,11 +28,11 @@ sudo cp $BEAR_BIN/kboot2 partition/kboot2
 sudo cp $BEAR_BIN/boot2 partition/boot2
 
 # these two lines for booting bear kernel AND hypervisor
-#sudo cp $BEAR_BIN/hypv partition/binaryte
-#sudo cp $BEAR_BIN/kernel partition/kernel
+sudo cp $BEAR_BIN/hypv partition/binaryte
+sudo cp $BEAR_BIN/kernel partition/kernel
 
 # this line for booting bear kernel WITHOUT hypervisor.
-sudo cp $BEAR_BIN/kernel partition/binaryte
+#sudo cp $BEAR_BIN/kernel partition/binaryte
 
 #daemons, shell, and tools - no networking, nfs, or test script
 sudo cp $BEAR_BIN/vgad partition/vgad

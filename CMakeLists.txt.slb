@@ -7,7 +7,7 @@ cmake_minimum_required (VERSION 2.8)
 set(CMAKE_C_COMPILER "gcc")
 project (BEAR)
 
-set(DEFAULT_FLAGS "-ggdb -fno-builtin -ffreestanding -fno-stack-protector -mcmodel=large -nostdinc -nostdlib -MMD -DSTANDALONE -DSLB_THESIS -DKERNEL_DEBUG")
+set(DEFAULT_FLAGS "-ggdb -fno-pie -fno-builtin -ffreestanding -fno-stack-protector -mcmodel=large -nostdinc -nostdlib -MMD -DSTANDALONE -DSLB_THESIS -DKERNEL_DEBUG")
 
 set(SYSTEM_FLAGS "-DSYSTEM -DSERIAL_OUT_SYSTEM -DEXCEPTION_DEBUG -DDEBUG -DENABLE_SMP")
 

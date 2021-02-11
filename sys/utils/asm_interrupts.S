@@ -24,7 +24,6 @@
 	.extern systick_hypv_handler
 	.extern keyboard_hypv_handler
 	.extern network_hypv_handler
-	.extern vtd_fault_handler
 #endif
 	
 	.text # Is this right?
@@ -438,20 +437,6 @@ ENTRY(network_asm)
 
 	iretq		
 SET_SIZE(network_asm)
-
-ENTRY(vtd_fault_asm)
-	cli
-	HYPV_SAVE_CONTEXT
-						
-	movq $0x86, %rdi
-	RELCALL(vtd_fault_handler)
-	RELCALL(lapic_eoi)
-	HYPV_RESTORE_CONTEXT
-
-	iretq		
-SET_SIZE(vtd_fault_asm)
-
-
 
 #endif     
 
