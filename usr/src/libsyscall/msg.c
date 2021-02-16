@@ -5,7 +5,7 @@
 #include <swint.h>
 #include <msg.h>
 #ifdef SLB_THESIS
-#include <stdlib.h>
+//#include <stdlib.h>
 #include <ring0.h>
 #endif
 

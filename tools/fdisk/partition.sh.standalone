@@ -59,7 +59,7 @@ sudo cp $BEAR_BIN/../usr.test.bin/thash partition/thash
 sudo cp $BEAR_BIN/../usr.test.bin/tshash partition/tshash
 sudo cp $BEAR_BIN/../usr.test.bin/echo partition/echo
 sudo cp $BEAR_BIN/../usr.test.bin/tenv partition/tenv
-sudo cp $BEAR_BIN/../usr.test.bin/trefresh partition/trefresh
+#sudo cp $BEAR_BIN/../usr.test.bin/trefresh partition/trefresh
 sudo cp $BEAR_BIN/../usr.test.bin/tpiped partition/tpiped
 
 ###########################
