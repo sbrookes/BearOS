@@ -34,6 +34,7 @@
 #include <kvmem.h>
 #include <vmx_utils.h>
 
+extern uint32_t ACPI_Address;
 extern struct RSDPDescriptor20 rsdpdesc;
 static int first = 1;
 
@@ -155,7 +156,7 @@ void create_ept(vproc_t *vp) {
     page = &pt->ept_entries[pt_idx];
     paddr = get_free_frame();
     init_ept_page(page, paddr, PHYS, CACHE);
-
+    
     /* Create a temporary mapping if we reach the memory map */
     if(pml4t_idx == virt2pml4t(MEMORY_MAP) &&
        pdpt_idx  == virt2pdpt(MEMORY_MAP)  && 
@@ -268,21 +269,26 @@ void create_ept(vproc_t *vp) {
   }
 
   /* calculate the start and end of the acpi tables in real ram */
-#ifdef DEBUG_ACPI
-  kprintf("RsdtAddress = 0x%x, acpi_start = 0x%x\n", rsdpdesc.RsdtAddress,
-          acpi_start);
-#endif
   for(i = 0; i < *numchunks; i++, chunk++ ) {
 
     if ( chunk->length == 0 )
       continue;
+#ifdef QEMU
+    if ( chunk->base < ACPI_Address && (chunk->base + chunk->length > ACPI_Address) )
+#else
     if ( chunk->type == 3 )
+#endif
       break;
   }
 
   acpi_start = chunk->base;
   acpi_end = acpi_start + chunk->length;
 
+#ifdef DEBUG_ACPI
+  kprintf("RsdtAddress = 0x%x, acpi_start = 0x%x\n", rsdpdesc.RsdtAddress,
+          acpi_start);
+#endif
+  
   entry_ptr = (uint32_t*)((struct ACPIHeader *)(uintptr_t)rsdpdesc.RsdtAddress+1);
   end_rsdt = (uint32_t*)(((uint8_t*)(uintptr_t)rsdpdesc.RsdtAddress)+((struct ACPIHeader *)(uintptr_t)rsdpdesc.RsdtAddress)->Length)-1;
   if(first) {

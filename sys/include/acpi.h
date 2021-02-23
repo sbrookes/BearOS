@@ -270,6 +270,7 @@ struct ACPIHPETDHeader
 
 
 /* Global variable for the system's RSDP descriptor. */
+extern uint32_t ACPI_Address;
 extern struct RSDPDescriptor20 rsdpdesc;
 extern void* CPUQueue;
 extern void* IOAPICQueue;

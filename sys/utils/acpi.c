@@ -32,7 +32,7 @@
 #include <pci.h>
 
 /*Not all debugging features are enabled by default in this file (RMD)*/
-
+uint32_t ACPI_Address;
 struct RSDPDescriptor20 rsdpdesc;
 void* CPUQueue;
 void* IOAPICQueue;
@@ -580,6 +580,7 @@ void Scan_ACPI()
 			to 0xXXXXE000. This is only a problem for the last table as we are
 			identity mapping from the start to the end. (RMD)
 	*/
+	ACPI_Address = address;
 	address_end = *(end_rsdt-1)+0x2000;
 #ifdef DEBUG_ACPI
 	kprintf("address %x entryptr = %x end_rsdt %x address_end %x\n",address,entry_ptr,end_rsdt,address_end);
