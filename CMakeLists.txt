@@ -1,14 +1,15 @@
 # CMakeLists.txt.standalone -- Used to build the system for the Dell Optiplex 
 # without any networking or services. 
 # This file is used by "mkall -s"
+# See CMakeLists.txt.hw for a description of available flags.
 
 cmake_minimum_required (VERSION 2.8)
 set(CMAKE_C_COMPILER "gcc")
 project (BEAR)
 
-set(DEFAULT_FLAGS "-ggdb -fno-pie -fno-builtin -ffreestanding -fno-stack-protector -mcmodel=large -nostdinc -nostdlib -MMD -DSTANDALONE -DSLB_THESIS -DKERNEL_DEBUG")
+set(DEFAULT_FLAGS "-ggdb -fno-pie -fno-builtin -ffreestanding -fno-stack-protector -mcmodel=large -nostdinc -nostdlib -MMD -DSTANDALONE -DSLB_THESIS -DKERNEL_DEBUG -DQEMU -DMULTICORE_PRINTING")
 
-set(SYSTEM_FLAGS "-DSERIAL_OUT_SYSTEM -DDDIVERSITY -DENABLE_SMP -DDXONLY_BEAR_HYPV -DDEBUG -DDEBUG_TSC -DQEMU")
+set(SYSTEM_FLAGS "-DSYSTEM -DSERIAL_OUT_SYSTEM -DEXCEPTION_DEBUG -DDEBUG -DENABLE_SMP")
 
 # USER_FLAGS: NFS used in the system only for compilation -- not in default flags
 set(USER_FLAGS "${DEFAULT_FLAGS} -DUSER -ffunction-sections -DBEARNFS -DSLB_THESIS")

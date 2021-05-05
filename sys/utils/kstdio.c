@@ -31,8 +31,8 @@
 char stdout_msg_arr[8][STDOUT_MSG_LEN];
 volatile int stdout_msg_idx[8]; 
 int printer_cpu_up = 0;
-static int tputc(int c, FIL *fp);
-static void tdo_print(const char *fmt, va_list argp, FIL *stream);
+int tputc(int c, FIL *fp);
+void tdo_print(const char *fmt, va_list argp, FIL *stream);
 #endif
 
 static int putc(int c, FIL *fp);
@@ -317,7 +317,7 @@ void tkprintf(const char *fmt, ...) {
 }
 
 
-static void tdo_print(const char *fmt, va_list argp, FIL *stream) {
+void tdo_print(const char *fmt, va_list argp, FIL *stream) {
   int c;                                        /* Next character in fmt */
   int d;
   uint64_t u;                                   /* Hold number argument */
@@ -410,7 +410,7 @@ static void tdo_print(const char *fmt, va_list argp, FIL *stream) {
 }
 
 
-static int tputc(int c, FIL *fp) {
+int tputc(int c, FIL *fp) {
   
   if (fp == STDOUT) {
     if((c) == '\n'){

@@ -683,9 +683,12 @@ void interrupt(unsigned int vec, void *varg) {
 #ifndef VMWARE
   if(vec == 0x21 ){
     code = inb(0x60);       /* get the scan code for the key struck */
+#if 0
+    // per https://forum.osdev.org/viewtopic.php?f=1&t=40001 ... not needed
     val = inb(0x64);         /* strobe the keyboard to ack the char  */
     outb(0x64, val | 0x80);  /* strobe the bit high                  */
     outb(0x64, val);           /* now strobe it low                    */
+#endif
 #ifdef DELL_9020_KBD_FIX
     flip^=0x1;
     if(flip == 1)
